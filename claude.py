@@ -6,7 +6,6 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 import xgboost as xgb
 import matplotlib.pyplot as plt
 
-# Data Preparation Function
 def prepare_data(electricity_data, temperature_data):
     # Resample electricity data to hourly
     electricity_hourly = electricity_data.resample('h').mean()
@@ -20,7 +19,6 @@ def prepare_data(electricity_data, temperature_data):
     
     return merged_data
 
-# Feature Engineering Function
 def create_time_features(electricity_data):
     electricity_data['hour'] = electricity_data.index.hour
     electricity_data['day_of_week'] = electricity_data.index.dayofweek
@@ -28,7 +26,6 @@ def create_time_features(electricity_data):
     electricity_data['is_weekend'] = electricity_data.index.dayofweek.isin([5, 6]).astype(int)
     return electricity_data
 
-# Create Lagged Features
 def create_lagged_features(electricity_data, electricity_column, lag_hours=24*7):
     # Create all lagged features at once using concat
     lags = [electricity_data[electricity_column].shift(lag)
@@ -39,7 +36,6 @@ def create_lagged_features(electricity_data, electricity_column, lag_hours=24*7)
     electricity_data = pd.concat([electricity_data, lagged_df], axis=1)
     return electricity_data.dropna()
 
-# XGBoost Model Function
 def train_xgboost_model(X_train, y_train):
     model = xgb.XGBRegressor(
         n_estimators=100,
@@ -53,14 +49,12 @@ def train_xgboost_model(X_train, y_train):
     model.fit(X_train, y_train)
     return model
 
-# Prediction Function
 def predict_electricity_usage(model, X_test,Y_test):
     predictions = model.predict(X_test)
     print("X_test columns:", type(X_test))
     predictions = pd.Series(predictions, index=Y_test.index)  # Add datetime index
     return predictions
 
-# Evaluation Function
 def evaluate_model(y_true, y_pred):
     mse = mean_squared_error(y_true, y_pred)
     mae = mean_absolute_error(y_true, y_pred)
@@ -72,7 +66,6 @@ def evaluate_model(y_true, y_pred):
     print(f"Root Mean Squared Error: {rmse}")
     print(f"Mean Absolute Percentage Error: {mape:.2f}%")
 
-# Visualization Function
 def plot_predictions(y_true, y_pred):
     plt.figure(figsize=(12, 6))
     plt.plot(y_true, label='Actual')
@@ -85,7 +78,6 @@ def plot_predictions(y_true, y_pred):
     print(type(y_pred), type(y_true))
     plt.show()
 
-# Main Execution
 def main():
     # Load Data
     electricity_data = pd.read_csv('household_power_consumption.csv')
