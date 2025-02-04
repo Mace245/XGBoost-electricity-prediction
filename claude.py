@@ -118,41 +118,23 @@ def main():
     
     # Train-Test Split
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
-    print("X_test columns:", type(X_test))
-    print(X_test.head())
-    print("X_train columns:", type(X_train))
-    print("y_test columns:", type(y_test))
-    print("y_train columns:", type(y_train))
-    
-    # Scale Features
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
+    # print("X_test columns:", type(X_test))
+    # print(X_test.head())
+    # print("X_train columns:", type(X_train))
+    # print("y_test columns:", type(y_test))
+    # print("y_train columns:", type(y_train))
     
     # Train Model
-    # model = train_xgboost_model(X_train, y_train)
+    model = train_xgboost_model(X_train, y_train)
     
-    # # Predict
-    # predictions = predict_electricity_usage(model, X_test, y_test)
+    # Predict
+    predictions = predict_electricity_usage(model, X_test, y_test)
     
-    # # Evaluate
-    # evaluate_model(y_test, predictions)
+    # Evaluate
+    evaluate_model(y_test, predictions)
     
-    # # Visualize
-    # plot_predictions(y_test, predictions)
-    minmax_scaler = MinMaxScaler()
-    test_cases = {
-    'Raw Features': (X_train.values, X_test.values),
-    'StandardScaler': (scaler.fit_transform(X_train), scaler.transform(X_test)),
-    'MinMaxScaler': (minmax_scaler.fit_transform(X_train), minmax_scaler.transform(X_test))
-}
-
-    for name, (X_tr, X_te) in test_cases.items():
-        model = train_xgboost_model(X_tr, y_train)
-        preds = model.predict(X_te)
-        print(f'\n{name} Performance:')
-        evaluate_model(y_test, preds)
-        print("done")
+    # Visualize
+    plot_predictions(y_test, predictions)
 
 if __name__ == "__main__":
     main()
