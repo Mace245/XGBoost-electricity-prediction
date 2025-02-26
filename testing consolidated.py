@@ -60,13 +60,26 @@ def prepare_data(electricity_data, temperature_data):
 # Feature Engineering
 # ----------------------
 def create_time_features(data):
-    """Add temporal features"""
+    # Existing features
     data = data.copy()
     data['hour'] = data.index.hour
-    data['day_of_week'] = data.index.dayofweek  # 0=Monday
+    data['day_of_week'] = data.index.dayofweek
     data['day_of_month'] = data.index.day
     data['is_weekend'] = (data['day_of_week'] >= 5).astype(int)
+    
+    # Add Fourier terms for daily and weekly seasonality
+    data['fourier_daily_sin'] = np.sin(2 * np.pi * data['hour'] / 24)
+    data['fourier_daily_cos'] = np.cos(2 * np.pi * data['hour'] / 24)
+    data['fourier_weekly_sin'] = np.sin(2 * np.pi * data.index.dayofyear / 365)
+    data['fourier_weekly_cos'] = np.cos(2 * np.pi * data.index.dayofyear / 365)
+    
     return data
+
+def add_rolling_features(data):
+    data['rolling_mean_24'] = data['Global_active_power'].rolling(24).mean()
+    data['rolling_std_24'] = data['Global_active_power'].rolling(24).std()
+    data['temp_rolling_mean_24'] = data['temperature'].rolling(24).mean()
+    return data.dropna()
 
 def create_lagged_features(data, target_col='Global_active_power', lags=[1, 24, 168]):
     """Add lagged features (1h, 24h, 168h=1 week)"""
@@ -100,7 +113,7 @@ def train_xgboost_model(X_train, y_train):
         reg_alpha=0.1,
         reg_lambda=0.1,
         n_jobs=-1,
-        early_stopping_rounds=50,
+        # early_stopping_rounds=50,
         eval_metric='mape'
     )
     
@@ -116,7 +129,7 @@ def train_xgboost_model(X_train, y_train):
             eval_set=[(X_val_fold, y_val_fold)],
             verbose=True
         )
-        scores.append(model.best_score)
+        # scores.append(model.best_score)
     
     print(f"Avg Validation Score: {np.mean(scores):.4f}")
     return model
@@ -152,12 +165,16 @@ if __name__ == "__main__":
     merged_data = create_time_features(merged_data)
     merged_data = create_lagged_features(merged_data)
     merged_data = add_seasonal_components(merged_data)
+    merged_data = add_rolling_features(merged_data)
+    merged_data['temp_squared'] = merged_data['temperature'] ** 2  # Non-linear effect
     
     # Define features
     features = [
         'temperature', 'hour', 'day_of_week', 'day_of_month', 'is_weekend',
         'trend', 'seasonal', 'residual', 
-        'lag_1', 'lag_24', 'lag_168'
+        'lag_1', 'lag_24', 'lag_168',
+        # 'fourier_daily_sin', 'fourier_daily_cos', 'fourier_weekly_sin', 'fourier_weekly_cos',
+        # 'rolling_mean_24', 'rolling_std_24', 'temp_rolling_mean_24', 'temp_squared'
     ]
     target = 'Global_active_power'
     
