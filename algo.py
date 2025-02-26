@@ -59,7 +59,7 @@ def train_xgboost_model(X_train, y_train):
         model.fit(
             X_train_fold, y_train_fold,
             eval_set=[(X_val_fold, y_val_fold)],
-            verbose=True
+            verbose=False
         )
         scores.append(model.best_score)
     

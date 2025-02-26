@@ -114,7 +114,7 @@ def train_xgboost_model(X_train, y_train):
         model.fit(
             X_train_fold, y_train_fold,
             eval_set=[(X_val_fold, y_val_fold)],
-            verbose=True
+            verbose=False
         )
         scores.append(model.best_score)
     
@@ -157,7 +157,7 @@ if __name__ == "__main__":
     features = [
         'temperature', 'hour', 'day_of_week', 'day_of_month', 'is_weekend',
         'trend', 'seasonal', 'residual', 
-        'lag_1', 'lag_24', 'lag_168'
+        'lag_1', 'lag_24'
     ]
     target = 'Global_active_power'
     
@@ -172,22 +172,24 @@ if __name__ == "__main__":
         pickle.dump(model, f)
     merged_data.to_csv('processed_data.csv', index=True)
     
+    forecast_period = pd.Timedelta(days=1)
+
     # Generate 1-week forecast
-    last_known_data = X.iloc[-168:]  # Last week of data
+    last_known_data = X.loc[X.index > X.index.max() - forecast_period]  # Last week of data
     forecast = recursive_forecast(model, last_known_data)
     
     # Visualize
     plt.figure(figsize=(12, 6))
-    plt.plot(y[-168:], label='Historical')
+    plt.plot(y.loc[y.index > y.index.max() - forecast_period], label='Historical')
     plt.plot(forecast, label='Forecast', linestyle='--')
     plt.title('1-Week Load Forecast')
     plt.legend()
     plt.show()
 
-    mse = mean_squared_error(y[-168:], forecast)
-    mae = mean_absolute_error(y[-168:], forecast)
+    mse = mean_squared_error(y.loc[y.index > y.index.max() - forecast_period], forecast)
+    mae = mean_absolute_error(y.loc[y.index > y.index.max() - forecast_period], forecast)
     rmse = np.sqrt(mse)
-    mape = np.mean(np.abs((y[-168:] - forecast) / y[-168:])) * 100
+    mape = np.mean(np.abs((y.loc[y.index > y.index.max() - forecast_period] - forecast) / y.loc[y.index > y.index.max() - forecast_period])) * 100
     
     print(f"Mean Squared Error: {mse}")
     print(f"Mean Absolute Error: {mae}")
