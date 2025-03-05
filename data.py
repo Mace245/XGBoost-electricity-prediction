@@ -2,6 +2,10 @@ import pandas as pd
 import numpy as np
 from scipy.stats import zscore
 
+# DATASET USE ACTUALLY KWH, NOT KW
+# EXPLAIN SEASONAL DECOMPOSITION
+# EXPLAIN LAGGED FEATURES
+
 def fetch_elec_temp():
     electricity_data = pd.read_csv('household_power_consumption.csv')
     
@@ -12,9 +16,7 @@ def fetch_elec_temp():
     )
     electricity_data = electricity_data.set_index('DateTime')
     electricity_data = electricity_data[['Global_active_power']]
-    electricity_data['Global_active_power'] = pd.to_numeric(
-        electricity_data['Global_active_power'], errors='coerce'
-    )
+    electricity_data['Global_active_power'] = pd.to_numeric(electricity_data['Global_active_power'], errors='coerce')
     
     # Load temperature data
     temperature_data = pd.read_csv('open-meteo-unix 20nov-22jan.csv')

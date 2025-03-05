@@ -31,9 +31,7 @@ def add_seasonal_components(data, period=24):
     data['residual'] = decomposition.resid
     return data.dropna()
 
-# ----------------------
 # Modeling
-# ----------------------
 def train_xgboost_model(X_train, y_train):
     """Train with paper-inspired parameters"""
     model = xgb.XGBRegressor(
@@ -66,9 +64,7 @@ def train_xgboost_model(X_train, y_train):
     print(f"Avg Validation Score: {np.mean(scores):.4f}")
     return model
 
-# ----------------------
 # Feature Engineering
-# ----------------------
 def create_lagged_features(data, target_col='Global_active_power'):
     """Create only necessary lags: 1h, 24h, 168h"""
     lags = [1, 24, 168]  # 1h, 24h, 168h
@@ -76,9 +72,7 @@ def create_lagged_features(data, target_col='Global_active_power'):
         data[f'lag_{lag}'] = data[target_col].shift(lag)
     return data.dropna()
 
-# ----------------------
 # Forecasting
-# ----------------------
 def recursive_forecast(model, last_observed_window):
     predictions = model.predict(last_observed_window)
     print("X_test columns:", type(last_observed_window))
