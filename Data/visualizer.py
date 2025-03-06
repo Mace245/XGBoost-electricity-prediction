@@ -3,12 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Load the CSV file into a DataFrame
-electricity_data = pd.read_csv('output26.csv')
-
-electricity_data['DateTime'] = pd.to_datetime(
-    electricity_data['Date'] + ' ' + electricity_data['Time'], 
-    format='%d/%m/%Y %H:%M:%S'
-)
+electricity_data = pd.read_csv('output.csv')
 
 electricity_data = electricity_data.set_index('DateTime')
 electricity_data = electricity_data[['Global_active_power']]
