@@ -18,22 +18,46 @@ hourly_complete.to_csv('hourly_complete.csv')  # Save for reference
 # 4. Detect and display missing hours
 missing_hours = hourly_complete[hourly_complete['Global_active_power'].isna()]
 print(f"Missing hours detected: {len(missing_hours)}")
-print(missing_hours.index.to_list())  # Show timestamps of missing hours
+# print(missing_hours.index.to_list())  # Show timestamps of missing hours
 
 count_filled = 0
 count_total = 0
+count_prev_week = 0
+count_next_week = 0
 
 # 5. Fill missing hours with previous week's data
 for idx in missing_hours.index:
+    filled_value = None  # to store the candidate replacement value
+    source = None       # to track which date provided the replacement
+
+    # Check the previous week value first
     prev_week = idx - pd.Timedelta(weeks=1)
     if prev_week in hourly_original.index:
-        print(f"Filling missing hour at {idx} ({hourly_complete.loc[idx, 'Global_active_power']}) with data from {prev_week} ({hourly_original.loc[prev_week, 'Global_active_power']})")
-        hourly_complete.loc[idx, 'Global_active_power'] = hourly_original.loc[prev_week, 'Global_active_power']
-        if hourly_complete.loc[idx, 'Global_active_power']:
-            count_filled += 1
+        prev_value = hourly_original.loc[prev_week, 'Global_active_power']
+        if not pd.isna(prev_value) and prev_value != 0:
+            filled_value = prev_value
+            source = prev_week
+            count_prev_week += 1
+
+    # If previous week's value is NaN or not available, check the next week
+    if filled_value is None:
+        next_week = idx + pd.Timedelta(weeks=1)
+        if next_week in hourly_original.index:
+            next_value = hourly_original.loc[next_week, 'Global_active_power']
+            if not pd.isna(next_value) and next_value != 0:
+                filled_value = next_value
+                count_next_week += 1
+
+    # If a valid replacement was found, fill the missing value
+    if filled_value is not None:
+        print(f"Filling missing hour at {idx} (current value: {hourly_complete.loc[idx, 'Global_active_power']}) "
+              f"with data from {source} (value: {filled_value})")
+        hourly_complete.loc[idx, 'Global_active_power'] = filled_value
+        count_filled += 1
+
     count_total += 1
     
-print(f"Missing hours filled: {count_filled}/{count_total}")
+print(f"Missing hours filled: {count_filled}/{count_total}, with {count_prev_week} from previous week and {count_next_week} from next week")
 
 # 6. Save final data
 hourly_complete.reset_index().rename(columns={'index':'DateTime'}).to_csv('processed_hourly_data.csv', index=False)
