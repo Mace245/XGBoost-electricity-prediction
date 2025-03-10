@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from scipy.stats import zscore
+import temp_api
 
 # DATASET USE ACTUALLY KWH, NOT KW
 # EXPLAIN SEASONAL DECOMPOSITION
@@ -19,9 +20,26 @@ def fetch_elec_temp():
     electricity_data['Global_active_power'] = pd.to_numeric(electricity_data['Global_active_power'], errors='coerce')
     
     # Load temperature data
-    temperature_data = pd.read_csv('open-meteo-unix 20nov-22jan.csv')
-    temperature_data['time'] = pd.to_datetime(temperature_data['time'], unit='s')
-    temperature_data = temperature_data.set_index('time')[['temperature']]
+    # temperature_data = pd.read_csv('open-meteo-unix 20nov-22jan.csv')
+    # temperature_data['time'] = pd.to_datetime(temperature_data['time'], unit='s')
+    # temperature_data = temperature_data.set_index('time')[['temperature']]
+
+    # Compute the formatted start and end dates
+    start_date = electricity_data.index.min().strftime('%Y-%m-%d')
+    end_date = electricity_data.index.max().strftime('%Y-%m-%d')
+    print(start_date, end_date)
+
+    # Define the location coordinates
+    latitude = 14.5833
+    longitude = 121
+
+    # Call the function with clearly named parameters
+    temp_api.temp_fetch_historical(
+        start_date=start_date,
+        end_date=end_date,
+        latitude=latitude,
+        longitude=longitude
+    )
     
     return electricity_data, temperature_data
 

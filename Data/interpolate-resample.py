@@ -6,13 +6,13 @@ df = pd.read_csv('output.csv', parse_dates=['DateTime'])
 df.set_index('DateTime', inplace=True)
 
 # 2. Resample to hourly means
-hourly_original = df.resample('H').mean()
+hourly_original = df.resample('h').mean()
 hourly_original['Global_active_power'] = hourly_original['Global_active_power'].fillna(0)
 
 # 3. Create complete hourly index covering full date range
-start_date = df.index.min().floor('H')  # Start of first hour with data
-end_date = df.index.max().ceil('H')     # End of last hour with data
-full_index = pd.date_range(start=start_date, end=end_date, freq='H')
+start_date = df.index.min().floor('h')  # Start of first hour with data
+end_date = df.index.max().ceil('h') - pd.Timedelta(hours=1)     # End of last hour with data
+full_index = pd.date_range(start=start_date, end=end_date, freq='h')
 hourly_complete = hourly_original.reindex(full_index)
 
 hourly_complete.to_csv('hourly_indexed.csv')  # Save for reference
@@ -84,8 +84,7 @@ for idx in missing_hours.index:
 
     # If a valid replacement was found, fill the missing value
     if filled_value is not None:
-        print(f"Filling missing hour at {idx} (current value: {hourly_complete.loc[idx, 'Global_active_power']}) "
-              f"with data from {source} (value: {filled_value})")
+        # print(f"Filling missing hour at {idx} (current value: {hourly_complete.loc[idx, 'Global_active_power']}) "f"with data from {source} (value: {filled_value})")
         hourly_complete.loc[idx, 'Global_active_power'] = filled_value
         count_filled += 1
 
@@ -94,18 +93,30 @@ for idx in missing_hours.index:
 print(f"Missing hours filled: {count_filled}/{count_total}, with {count_prev_week} from previous week and {count_next_week} from next week")
 missing_hours_after = hourly_complete[hourly_complete['Global_active_power'].isna()]
 print(f"Missing hours after imputation: {len(missing_hours_after)}")
-
+if not missing_hours_after.empty:
+    print(missing_hours_after.index.to_list())
 
 # 6. Save final data
 hourly_complete.reset_index().rename(columns={'index':'DateTime'}).to_csv('processed_hourly_data.csv', index=False)
 
+# Define the start and end of the one-week period
+start_date = hourly_complete.index.min()
+end_date = start_date + pd.Timedelta(weeks=1)
+# end_date = hourly_complete.index.max()
+
+# Subset the data for the chosen week
+hourly_original_week = hourly_original.loc[start_date:end_date]
+hourly_complete_week = hourly_complete.loc[start_date:end_date]
+missing_hours_week = missing_hours.loc[start_date:end_date]
+
+# Plot for the selected week
 plt.figure(figsize=(14, 7))
-plt.plot(hourly_original.index, hourly_original['Global_active_power'], label='Original Data', alpha=0.5)
-plt.plot(hourly_complete.index, hourly_complete['Global_active_power'], label='Complete Data', alpha=0.8)
-plt.scatter(missing_hours.index, hourly_complete.loc[missing_hours.index, 'Global_active_power'],
+plt.plot(hourly_original_week.index, hourly_original_week['Global_active_power'], label='Original Data', alpha=0.5)
+plt.plot(hourly_complete_week.index, hourly_complete_week['Global_active_power'], label='Complete Data', alpha=0.8)
+plt.scatter(missing_hours_week.index, hourly_complete_week.loc[missing_hours_week.index, 'Global_active_power'],
             color='red', label='Imputed Values')
 plt.xlabel("Time")
 plt.ylabel("Global Active Power")
-plt.title("Time Series Data with Imputed Values")
+plt.title("Time Series Data with Imputed Values (One Week)")
 plt.legend()
 plt.show()
