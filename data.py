@@ -8,16 +8,8 @@ import temp_api
 # EXPLAIN LAGGED FEATURES
 
 def fetch_elec_temp():
-    electricity_data = pd.read_csv('household_power_consumption.csv')
-    
-    # Convert datetime and handle NaNs
-    electricity_data['DateTime'] = pd.to_datetime(
-        electricity_data['Date'] + ' ' + electricity_data['Time'], 
-        format='%d/%m/%Y %H:%M:%S'
-    )
-    electricity_data = electricity_data.set_index('DateTime')
-    electricity_data = electricity_data[['Global_active_power']]
-    electricity_data['Global_active_power'] = pd.to_numeric(electricity_data['Global_active_power'], errors='coerce')
+    electricity_data = pd.read_csv('Data/processed_hourly_data.csv', parse_dates=['DateTime'])
+    electricity_data.set_index('DateTime', inplace=True)
     
     # Load temperature data
     # temperature_data = pd.read_csv('open-meteo-unix 20nov-22jan.csv')
@@ -27,6 +19,7 @@ def fetch_elec_temp():
     # Compute the formatted start and end dates
     start_date = electricity_data.index.min().strftime('%Y-%m-%d')
     end_date = electricity_data.index.max().strftime('%Y-%m-%d')
+    electricity_data = electricity_data.tz_localize('Asia/Kuala_Lumpur')
     print(start_date, end_date)
 
     # Define the location coordinates
@@ -34,7 +27,7 @@ def fetch_elec_temp():
     longitude = 121
 
     # Call the function with clearly named parameters
-    temp_api.temp_fetch_historical(
+    temperature_data = temp_api.temp_fetch_historical(
         start_date=start_date,
         end_date=end_date,
         latitude=latitude,
@@ -50,17 +43,19 @@ def handle_outliers(data, column='Global_active_power', threshold=3):
 
 def prepare_data(electricity_data, temperature_data):
     # Resample electricity data to hourly
-    electricity_hourly = electricity_data.resample('h').mean()
-    electricity_hourly = electricity_hourly.head(1536) # temp for invalid merge
+    # electricity_hourly = electricity_data.resample('h').mean()
+    # electricity_hourly = electricity_hourly.head(1536) # temp for invalid merge
     # print(electricity_hourly.info(), temperature_data.info())
+
+    print(electricity_data, temperature_data)
     
     # Merge electricity and temperature data
-    merged_data = electricity_hourly
-    merged_data['temperature'] = temperature_data['temperature'].values
-    # print(merged_data)
+    merged_data = electricity_data.merge(temperature_data, how='left', left_index=True, right_index=True)
+    print(merged_data)
     
     # Handle missing values and outliers
     merged_data = merged_data.ffill().dropna()
     merged_data = handle_outliers(merged_data)
     
     return merged_data
+

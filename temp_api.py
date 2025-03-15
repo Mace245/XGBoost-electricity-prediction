@@ -34,18 +34,21 @@ def temp_fetch_historical(start_date, end_date, latitude, longitude):
 	hourly = response.Hourly()
 	hourly_temperature_2m = hourly.Variables(0).ValuesAsNumpy()
 
-	hourly_data = {"date": pd.date_range(
+	hourly_data = {"DateTime": pd.date_range(
 		start = pd.to_datetime(hourly.Time(), unit = "s", utc = True),
 		end = pd.to_datetime(hourly.TimeEnd(), unit = "s", utc = True),
 		freq = pd.Timedelta(seconds = hourly.Interval()),
 		inclusive = "left"
 	)}
 
-	hourly_data["temperature_2m"] = hourly_temperature_2m
+	hourly_data["temperature"] = hourly_temperature_2m
 
 	hourly_dataframe = pd.DataFrame(data = hourly_data)
+	hourly_dataframe.set_index('DateTime', inplace=True)
+	print(f"Start Date: {start_date}")
+	print(f"End Date: {end_date}")
 	print(hourly_dataframe)
 	return hourly_dataframe
 
-temp_fetch_historical("2025-01-01", "2025-02-13", 14.5833, 121)
+temp_fetch_historical("2025-01-02", "2025-02-13", 14.5833, 121)
 

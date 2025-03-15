@@ -3,3 +3,5 @@
 __pycache__/
 Data/Meter-26/
 Data/Meter-27/
+.cache.sqlite/
+Data/.cache.sqlite/
