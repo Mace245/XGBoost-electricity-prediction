@@ -12,7 +12,7 @@ def temp_fetch_historical(start_date, end_date, latitude, longitude):
 
 	# Make sure all required weather variables are listed here
 	# The order of variables in hourly or daily is important to assign them correctly below
-	url = "https://api.open-meteo.com/v1/forecast"
+	url = "https://archive-api.open-meteo.com/v1/archive"
 	params = {
 		"latitude": latitude,
 		"longitude": longitude,

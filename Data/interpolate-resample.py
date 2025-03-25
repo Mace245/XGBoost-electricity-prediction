@@ -101,8 +101,8 @@ hourly_complete.reset_index().rename(columns={'index':'DateTime'}).to_csv('proce
 
 # Define the start and end of the one-week period
 start_date = hourly_complete.index.min()
-end_date = start_date + pd.Timedelta(weeks=1)
-# end_date = hourly_complete.index.max()
+# end_date = start_date + pd.Timedelta(weeks=1)
+end_date = hourly_complete.index.max()
 
 # Subset the data for the chosen week
 hourly_original_week = hourly_original.loc[start_date:end_date]

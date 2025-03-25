@@ -18,7 +18,7 @@ merged_data = algo.add_seasonal_components(merged_data)
 # Define features
 features = [
     'hour', 'day_of_week', 'day_of_month', 'is_weekend',
-    'trend', 'seasonal', 'residual', 
+
     'lag_1', 'lag_24', 'lag_168',
     'temperature'
 ]
@@ -35,7 +35,7 @@ with open('model.pkl', 'wb') as f:
     pickle.dump(model, f)
 merged_data.to_csv('processed_data.csv', index=True)
 
-forecast_period = pd.Timedelta(days=30)
+forecast_period = pd.Timedelta(days=365*2)
 
 # Generate forecast
 last_known_data = X.loc[X.index > X.index.max() - forecast_period]  # Last week of data
