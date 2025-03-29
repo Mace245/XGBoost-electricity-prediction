@@ -8,7 +8,7 @@ import temp_api
 # EXPLAIN LAGGED FEATURES
 
 def fetch_elec_temp():
-    electricity_data = pd.read_csv('Data/processed_hourly_data.csv', parse_dates=['DateTime'])
+    electricity_data = pd.read_csv('Data/processed_hourly_Wh_data.csv', parse_dates=['DateTime'])
     electricity_data.set_index('DateTime', inplace=True)
     
     # Load temperature data
