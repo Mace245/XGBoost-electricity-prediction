@@ -1,7 +1,12 @@
 .aider*
 .env
 __pycache__/
-Data/Meter-26/
-Data/Meter-27/
 .cache.sqlite/
 Data/.cache.sqlite/
+app/ios/
+app/android/
+app/linux/
+app/macos/
+app/test/
+app/web/
+app/windows/
