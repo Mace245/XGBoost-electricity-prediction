@@ -1,206 +1,254 @@
 import pandas as pd
-import xgboost as xgb
-from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
-from sklearn.metrics import mean_squared_error, mean_absolute_error
-import matplotlib.pyplot as plt
-# import shap
-# import argparse
 import pickle
+import time
+from datetime import datetime, timedelta
+import algo
+import temp_api
+import matplotlib.pyplot as plt
 import numpy as np
-from scipy.stats import zscore
-from statsmodels.tsa.seasonal import seasonal_decompose
+import xgboost as xgb
 
-# ----------------------
-# Data Loading & Preprocessing
-# ----------------------
-def fetch_elec_temp():
-    electricity_data = pd.read_csv('household_power_consumption.csv')
-    
-    # Convert datetime and handle NaNs
-    electricity_data['DateTime'] = pd.to_datetime(
-        electricity_data['Date'] + ' ' + electricity_data['Time'], 
-        format='%d/%m/%Y %H:%M:%S'
-    )
-    electricity_data = electricity_data.set_index('DateTime')
-    electricity_data = electricity_data[['Global_active_power']]
-    electricity_data['Global_active_power'] = pd.to_numeric(
-        electricity_data['Global_active_power'], errors='coerce'
-    )
-    
-    # Load temperature data
-    temperature_data = pd.read_csv('open-meteo-unix 20nov-22jan.csv')
-    temperature_data['time'] = pd.to_datetime(temperature_data['time'], unit='s')
-    temperature_data = temperature_data.set_index('time')[['temperature']]
-    
-    return electricity_data, temperature_data
-
-def handle_outliers(data, column='Global_active_power', threshold=3):
-    """Remove outliers using Z-score"""
-    z_scores = zscore(data[column])
-    return data[(np.abs(z_scores) < threshold)]
-
-def prepare_data(electricity_data, temperature_data):
-    # Resample electricity data to hourly
-    electricity_hourly = electricity_data.resample('h').mean()
-    electricity_hourly = electricity_hourly.head(1536) # temp for invalid merge
-    # print(electricity_hourly.info(), temperature_data.info())
-    
-    # Merge electricity and temperature data
-    merged_data = electricity_hourly
-    merged_data['temperature'] = temperature_data['temperature'].values
-    # print(merged_data)
-    
-    # Handle missing values and outliers
-    merged_data = merged_data.ffill().dropna()
-    merged_data = handle_outliers(merged_data)
-    
-    return merged_data
-
-# ----------------------
-# Feature Engineering
-# ----------------------
-def create_time_features(data):
-    """Add temporal features"""
-    data = data.copy()
-    data['hour'] = data.index.hour
-    data['day_of_week'] = data.index.dayofweek  # 0=Monday
-    data['day_of_month'] = data.index.day
-    data['is_weekend'] = (data['day_of_week'] >= 5).astype(int)
+# Load the trained model
+def load_model():
+    try:
+        with open('model.pkl', 'rb') as f:
+            model = pickle.load(f)
+        return model
+    except FileNotFoundError:
+        print("Model not found. Please run main.py first to train the model.")
+        return None
+        
+# Load historical data
+def load_historical_data():
+    try:
+        # Try to load pre-processed data first
+        data = pd.read_csv('processed_data.csv', parse_dates=['DateTime'])
+        data.set_index('DateTime', inplace=True)
+        print("Loaded processed data.")
+    except FileNotFoundError:
+        # If not available, load raw data
+        try:
+            data = pd.read_csv('Data/processed_hourly_Wh_data.csv', parse_dates=['DateTime'])
+            data.set_index('DateTime', inplace=True)
+            print("Loaded raw hourly data.")
+        except FileNotFoundError:
+            print("No data files found. Please ensure data is available.")
+            return None
     return data
 
-def create_lagged_features(data, target_col='Global_active_power', lags=[1, 24, 168]):
-    """Add lagged features (1h, 24h, 168h=1 week)"""
-    for lag in lags:
-        data[f'lag_{lag}'] = data[target_col].shift(lag)
-    return data.dropna()
-
-def add_seasonal_components(data, period=24):
-    """Add seasonal decomposition features (daily cycle)"""
-    decomposition = seasonal_decompose(
-        data['Global_active_power'], 
-        model='additive', 
-        period=period
-    )
-    data['trend'] = decomposition.trend
-    data['seasonal'] = decomposition.seasonal
-    data['residual'] = decomposition.resid
-    return data.dropna()
-
-# ----------------------
-# Modeling
-# ----------------------
-def train_xgboost_model(X_train, y_train):
-    """Train with paper-inspired parameters"""
-    model = xgb.XGBRegressor(
-        max_depth=6,
-        learning_rate=0.01,
-        n_estimators=1000,
-        colsample_bytree=0.7,
-        subsample=0.8,
-        reg_alpha=0.1,
-        reg_lambda=0.1,
-        n_jobs=-1,
-        early_stopping_rounds=50,
-        eval_metric='mape'
-    )
+def simulate_realtime_prediction(data, model, interval_minutes=5, prediction_horizon=24, 
+                                 simulation_days=7):
+    """
+    Simulate real-time prediction using historical data
     
-    # Time-series cross-validation
-    tss = TimeSeriesSplit(n_splits=3)
-    scores = []
-    for train_idx, val_idx in tss.split(X_train):
-        X_train_fold, X_val_fold = X_train.iloc[train_idx], X_train.iloc[val_idx]
-        y_train_fold, y_val_fold = y_train.iloc[train_idx], y_train.iloc[val_idx]
+    Parameters:
+    - data: DataFrame with historical electricity data
+    - model: Trained XGBoost model
+    - interval_minutes: How often to make predictions (in minutes)
+    - prediction_horizon: How many hours to predict ahead
+    - simulation_days: How many days to simulate
+    """
+    # Define simulation period
+    start_time = data.index.min()
+    end_time = start_time + timedelta(days=simulation_days)
+    
+    if end_time > data.index.max():
+        end_time = data.index.max() - timedelta(hours=prediction_horizon)
+        print(f"Adjusted simulation end time to {end_time} due to data limitations")
+    
+    current_time = start_time
+    
+    # Store predictions for evaluation
+    all_predictions = {}
+    actual_values = {}
+    
+    print(f"Starting simulation from {start_time} to {end_time}")
+    print(f"Making predictions every {interval_minutes} minutes for the next {prediction_horizon} hours")
+    
+    # Simulation loop
+    while current_time <= end_time:
+        # Get data available up to the current time
+        available_data = data[data.index <= current_time].copy()
         
-        model.fit(
-            X_train_fold, y_train_fold,
-            eval_set=[(X_val_fold, y_val_fold)],
-            verbose=False
-        )
-        scores.append(model.best_score)
+        # Skip if not enough data for lag features
+        if len(available_data) < 168:  # Need at least a week of data for weekly lag
+            print(f"Not enough historical data at {current_time}. Skipping.")
+            current_time += timedelta(minutes=interval_minutes)
+            continue
+            
+        # Prepare features
+        features_data = algo.create_time_features(available_data)
+        features_data = algo.create_lagged_features(features_data)
+        
+        # Get temperature data for the prediction period
+        pred_start = current_time
+        pred_end = current_time + timedelta(hours=prediction_horizon)
+        
+        # Ensure all required features are available
+        required_features = ['hour', 'day_of_week', 'day_of_month', 'is_weekend',
+                             'lag_1', 'lag_24', 'lag_168', 'temperature']
+        
+        # For simulation, use the known temperature values from historical data
+        # In a real scenario, you would use forecasted temperatures
+        
+        # Make prediction for the next prediction_horizon hours
+        feature_set = features_data.tail(1)
+        
+        # Generate forecast using recursive method
+        forecast = pd.Series(index=pd.date_range(start=current_time, 
+                                               periods=prediction_horizon, 
+                                               freq='H'))
+        
+        latest_row = feature_set.iloc[0].copy()
+        
+        # Recursive prediction
+        for i in range(prediction_horizon):
+            # Calculate the timestamp for this step
+            step_time = current_time + timedelta(hours=i)
+            
+            # Update time features
+            latest_row['hour'] = step_time.hour
+            latest_row['day_of_week'] = step_time.dayofweek
+            latest_row['day_of_month'] = step_time.day
+            latest_row['is_weekend'] = int(step_time.dayofweek >= 5)
+            
+            # If temperature data is available, update it
+            if 'temperature' in latest_row:
+                if step_time in data.index:
+                    latest_row['temperature'] = data.loc[step_time, 'temperature']
+            
+            # Make prediction for this hour
+            pred_features = pd.DataFrame([latest_row])
+            prediction = model.predict(pred_features)[0]
+            
+            # Store prediction
+            forecast[step_time] = prediction
+            
+            # Update lag features for next prediction
+            if i < prediction_horizon - 1:
+                latest_row['lag_1'] = prediction
+                if i >= 24:
+                    latest_row['lag_24'] = forecast[step_time - timedelta(hours=24)]
+                if i >= 168:
+                    latest_row['lag_168'] = forecast[step_time - timedelta(hours=168)]
+        
+        # Store this prediction set
+        all_predictions[current_time] = forecast
+        
+        # Get actual values for the predicted period
+        actuals = data.loc[forecast.index, 'Global_active_power']
+        actual_values[current_time] = actuals
+        
+        # Print some information
+        print(f"\nPrediction at {current_time}:")
+        print(f"Next hour prediction: {forecast[0]:.4f} kW")
+        print(f"Actual value: {actuals.iloc[0] if len(actuals) > 0 else 'Unknown'}")
+        
+        # Move to next interval
+        current_time += timedelta(minutes=interval_minutes)
     
-    print(f"Avg Validation Score: {np.mean(scores):.4f}")
-    return model
+    return all_predictions, actual_values
 
-# ----------------------
-# Feature Engineering
-# ----------------------
-def create_lagged_features(data, target_col='Global_active_power'):
-    """Create only necessary lags: 1h, 24h, 168h"""
-    lags = [1, 24, 168]  # 1h, 24h, 168h
-    for lag in lags:
-        data[f'lag_{lag}'] = data[target_col].shift(lag)
-    return data.dropna()
+def evaluate_simulation(predictions, actuals):
+    """Evaluate the accuracy of the simulated predictions"""
+    from sklearn.metrics import mean_squared_error, mean_absolute_error
+    import numpy as np
+    
+    # Calculate metrics for each prediction time
+    metrics = {}
+    for pred_time, forecast in predictions.items():
+        actual = actuals[pred_time]
+        
+        # Calculate metrics only for overlapping time periods
+        common_idx = forecast.index.intersection(actual.index)
+        if len(common_idx) == 0:
+            continue
+            
+        pred_values = forecast[common_idx]
+        actual_values = actual[common_idx]
+        
+        mse = mean_squared_error(actual_values, pred_values)
+        mae = mean_absolute_error(actual_values, pred_values)
+        rmse = np.sqrt(mse)
+        mape = np.mean(np.abs((actual_values - pred_values) / actual_values)) * 100
+        
+        metrics[pred_time] = {
+            'MSE': mse,
+            'MAE': mae,
+            'RMSE': rmse,
+            'MAPE': mape
+        }
+    
+    # Calculate average metrics
+    avg_metrics = {
+        'MSE': np.mean([m['MSE'] for m in metrics.values()]),
+        'MAE': np.mean([m['MAE'] for m in metrics.values()]),
+        'RMSE': np.mean([m['RMSE'] for m in metrics.values()]),
+        'MAPE': np.mean([m['MAPE'] for m in metrics.values()])
+    }
+    
+    return metrics, avg_metrics
 
-# ----------------------
-# Forecasting
-# ----------------------
-def recursive_forecast(model, last_observed_window):
-    predictions = model.predict(last_observed_window)
-    print("X_test columns:", type(last_observed_window))
-    predictions = pd.Series(predictions, index=last_observed_window.index)  # Add datetime index
-    return predictions
+def visualize_predictions(predictions, actuals, sample_count=3):
+    """Visualize a sample of predictions against actual values"""
+    # Select a sample of prediction times
+    pred_times = list(predictions.keys())
+    if len(pred_times) > sample_count:
+        indices = np.linspace(0, len(pred_times)-1, sample_count, dtype=int)
+        sample_times = [pred_times[i] for i in indices]
+    else:
+        sample_times = pred_times
+    
+    # Create visualization
+    fig, axes = plt.subplots(len(sample_times), 1, figsize=(12, 4*len(sample_times)))
+    if len(sample_times) == 1:
+        axes = [axes]
+    
+    for i, pred_time in enumerate(sample_times):
+        forecast = predictions[pred_time]
+        actual = actuals[pred_time]
+        
+        axes[i].plot(actual, label='Actual', color='blue')
+        axes[i].plot(forecast, label='Forecast', color='red', linestyle='--')
+        axes[i].set_title(f'Prediction made at {pred_time}')
+        axes[i].legend()
+        axes[i].grid(True)
+    
+    plt.tight_layout()
+    plt.show()
 
-# ----------------------
-# Main Execution
-# ----------------------
+def run_realtime_simulation():
+    """Run the complete real-time simulation"""
+    # Load model and data
+    model = load_model()
+    data = load_historical_data()
+    
+    if model is None or data is None:
+        return
+    
+    # Run simulation
+    print("Starting real-time prediction simulation...")
+    predictions, actuals = simulate_realtime_prediction(
+        data, 
+        model,
+        interval_minutes=60,  # Make predictions every 30 minutes
+        prediction_horizon=24,  # Predict 24 hours ahead
+        simulation_days=7      # Simulate for 7 days
+    )
+    
+    # Evaluate results
+    print("\nEvaluating prediction accuracy...")
+    _, avg_metrics = evaluate_simulation(predictions, actuals)
+    
+    print("\nAverage Prediction Metrics:")
+    print(f"Mean Squared Error: {avg_metrics['MSE']:.4f}")
+    print(f"Mean Absolute Error: {avg_metrics['MAE']:.4f}")
+    print(f"Root Mean Squared Error: {avg_metrics['RMSE']:.4f}")
+    print(f"Mean Absolute Percentage Error: {avg_metrics['MAPE']:.2f}%")
+    
+    # Visualize results
+    print("\nVisualizing predictions...")
+    visualize_predictions(predictions, actuals)
+
 if __name__ == "__main__":
-    # Load data
-    electricity, temperature = fetch_elec_temp()
-    merged_data = prepare_data(electricity, temperature)
-    
-    # Feature engineering pipeline
-    merged_data = create_time_features(merged_data)
-    merged_data = create_lagged_features(merged_data)
-    merged_data = add_seasonal_components(merged_data)
-    
-    # Define features
-    features = [
-        'temperature', 'hour', 'day_of_week', 'day_of_month', 'is_weekend',
-        'trend', 'seasonal', 'residual', 
-        'lag_1', 'lag_24'
-    ]
-    target = 'Global_active_power'
-    
-    X = merged_data[features]
-    y = merged_data[target]
-    
-    # Train model
-    model = train_xgboost_model(X, y)
-    
-    # Save artifacts
-    with open('model.pkl', 'wb') as f:
-        pickle.dump(model, f)
-    merged_data.to_csv('processed_data.csv', index=True)
-    
-    forecast_period = pd.Timedelta(days=1)
-
-    # Generate 1-week forecast
-    last_known_data = X.loc[X.index > X.index.max() - forecast_period]  # Last week of data
-    forecast = recursive_forecast(model, last_known_data)
-    
-    # Visualize
-    plt.figure(figsize=(12, 6))
-    plt.plot(y.loc[y.index > y.index.max() - forecast_period], label='Historical')
-    plt.plot(forecast, label='Forecast', linestyle='--')
-    plt.title('1-Week Load Forecast')
-    plt.legend()
-    plt.show()
-
-    mse = mean_squared_error(y.loc[y.index > y.index.max() - forecast_period], forecast)
-    mae = mean_absolute_error(y.loc[y.index > y.index.max() - forecast_period], forecast)
-    rmse = np.sqrt(mse)
-    mape = np.mean(np.abs((y.loc[y.index > y.index.max() - forecast_period] - forecast) / y.loc[y.index > y.index.max() - forecast_period])) * 100
-    
-    print(f"Mean Squared Error: {mse}")
-    print(f"Mean Absolute Error: {mae}")
-    print(f"Root Mean Squared Error: {rmse}")
-    print(f"Mean Absolute Percentage Error: {mape:.2f}%")
-
-    # get importance
-    importance = model.feature_importances_
-    # summarize feature importance
-    for i,v in enumerate(importance):
-        print('Feature: %0d, Score: %.5f' % (i,v))
-    # plot feature importance
-    plt.bar([x for x in range(len(importance))], importance)
-    plt.show()
+    run_realtime_simulation()
