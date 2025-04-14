@@ -12,9 +12,9 @@
             <thead>
                 <tr>
                     <th>ID</th>
-                    <th>DateTime (YYYY-MM-DD HH:MM:SS)</th>
+                    <th>DateTime (UTC)</th>
                     <th>Energy (Wh)</th> <!-- Updated label -->
-                    <th>Temperature (°C)</th>
+                    <th>Temperature (Celsius)</th>
                 </tr>
             </thead>
             <tbody>
@@ -22,7 +22,7 @@
                 <tr>
                     <td>{{ reading.id }}</td>
                     <td>{{ reading.DateTime }}</td>
-                    <td>{{ "%.2f"|format(reading.DailyEnergy) if reading.DailyEnergy is not none else 'N/A' }}</td> {# Using DailyEnergy as Wh placeholder #}
+                    <td>{{ "%.2f"|format(reading.DailyEnergy) if reading.DailyEnergy is not none else 'N/A' }}</td>
                     <td>
                         {% if reading.Temperature is not none %}
                             {{ "%.2f"|format(reading.Temperature) }}

@@ -9,9 +9,9 @@
         <h4>Latest Reading</h4>
         {% if latest_reading %}
         <p>
-            <strong>Time:</strong> {{ latest_reading.DateTime }} <br>
+            <strong>Time (UTC):</strong> {{ latest_reading.DateTime }} <br>
             <strong>Energy (Wh):</strong> {{ "%.2f"|format(latest_reading.DailyEnergy) if latest_reading.DailyEnergy is not none else 'N/A' }} <br> {# Using DailyEnergy as Wh placeholder #}
-            <strong>Temperature:</strong> {{ "%.2f"|format(latest_reading.Temperature) if latest_reading.Temperature is not none else 'N/A' }} °C
+            <strong>Temperature (Celsius):</strong> {{ "%.2f"|format(latest_reading.Temperature) if latest_reading.Temperature is not none else 'N/A' }}
         </p>
         {% else %}
         <p class="text-muted">No data available yet.</p>

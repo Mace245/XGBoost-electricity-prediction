@@ -4,14 +4,14 @@ from scipy.stats import zscore
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 import matplotlib.pyplot as plt
 from collections import namedtuple
-import algo
+from lib import algo
 
 import openmeteo_requests
 import requests_cache
 import pandas as pd
 from retry_requests import retry
 
-def temp_fetch(start_date, end_date, latitude, longitude, historical):
+def temp_fetch(start_date, end_date, latitude:float, longitude:float, historical:bool):
 	# Setup the Open-Meteo API client with cache and retry on error
 	cache_session = requests_cache.CachedSession('.cache', expire_after = 3600)
 	retry_session = retry(cache_session, retries = 5, backoff_factor = 0.2)
@@ -57,7 +57,7 @@ def temp_fetch(start_date, end_date, latitude, longitude, historical):
 	hourly_dataframe.set_index('DateTime', inplace=True)
 	print(f"Start Date: {start_date}")
 	print(f"End Date: {end_date}")
-	print(hourly_dataframe)
+	# print(hourly_dataframe)
 	return hourly_dataframe
 
 # temp_fetch_historical("2025-01-02", "2025-02-13", 14.5833, 121)
@@ -101,7 +101,7 @@ def handle_outliers(data, column='Global_active_power', threshold=3):
     z_scores = zscore(data[column])
     return data[(np.abs(z_scores) < threshold)]
 
-def prepare_data(electricity_data, temperature_data):
+def prepare_data(electricity_data:pd.DataFrame, temperature_data:pd.DataFrame):
     # Resample electricity data to hourly
     # electricity_hourly = electricity_data.resample('h').mean()
     # electricity_hourly = electricity_hourly.head(1536) # temp for invalid merge
@@ -119,7 +119,7 @@ def prepare_data(electricity_data, temperature_data):
     
     return merged_data
 
-def create_training_data(features, target):
+def create_training_data(features:list[str], target:str):
     training_data = namedtuple("training_data", ['X', 'y'])
     # Load data
     electricity, temperature = fetch_elec_temp()
@@ -135,7 +135,7 @@ def create_training_data(features, target):
     merged_data.to_csv('training_data.csv', index=True)
     return training_data(X=X, y=y)
 
-def visualize(model, features, target_var, forecast, forecast_period):
+def visualize(model, features:list[str], target_var:str, forecast:pd.Series, forecast_period:pd.Timedelta):
     mse = mean_squared_error(target_var.loc[target_var.index > target_var.index.max() - forecast_period], forecast)
     mae = mean_absolute_error(target_var.loc[target_var.index > target_var.index.max() - forecast_period], forecast)
     rmse = np.sqrt(mse)
