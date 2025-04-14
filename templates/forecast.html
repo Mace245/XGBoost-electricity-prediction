@@ -1,0 +1,145 @@
+{% extends 'layout.html' %}
+
+{% block title %}Energy Forecast{% endblock %}
+
+{% block content %}
+    <h2>Energy Usage Forecast</h2>
+
+    <div id="currentUsage" class="shadow-sm">
+        <h4>Latest Reading</h4>
+        {% if latest_reading %}
+        <p>
+            <strong>Time:</strong> {{ latest_reading.DateTime }} <br>
+            <strong>Energy (Wh):</strong> {{ "%.2f"|format(latest_reading.DailyEnergy) if latest_reading.DailyEnergy is not none else 'N/A' }} <br> {# Using DailyEnergy as Wh placeholder #}
+            <strong>Temperature:</strong> {{ "%.2f"|format(latest_reading.Temperature) if latest_reading.Temperature is not none else 'N/A' }} °C
+        </p>
+        {% else %}
+        <p class="text-muted">No data available yet.</p>
+        {% endif %}
+    </div>
+
+    <h4>Prediction Settings</h4>
+    <div class="btn-group mb-3" role="group" aria-label="Forecast timeframe">
+      <button type="button" class="btn btn-outline-primary timeframe-btn" data-timeframe="1day">1 Day</button>
+      <button type="button" class="btn btn-outline-primary timeframe-btn" data-timeframe="3days">3 Days</button>
+      <button type="button" class="btn btn-outline-primary timeframe-btn" data-timeframe="1week">1 Week</button>
+    </div>
+    <button id="run-forecast" class="btn btn-success mb-3" disabled>Run Forecast</button>
+    <span id="loading-indicator" style="display: none;">Loading...</span>
+
+    <h4>Forecast Graph</h4>
+    <canvas id="forecastChart" width="400" height="200"></canvas>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let selectedTimeframe = null;
+    const timeframeButtons = document.querySelectorAll('.timeframe-btn');
+    const runButton = document.getElementById('run-forecast');
+    const loadingIndicator = document.getElementById('loading-indicator');
+    const ctx = document.getElementById('forecastChart').getContext('2d');
+    let forecastChart = null; // Initialize chart variable
+
+    // Function to initialize or update the chart
+    function renderChart(chartData) {
+        if (forecastChart) {
+            // Update existing chart
+            forecastChart.data.labels = chartData.labels;
+            forecastChart.data.datasets[0].data = chartData.data;
+            forecastChart.update();
+        } else {
+            // Create new chart
+            forecastChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: chartData.labels,
+                    datasets: [{
+                        label: 'Forecasted Energy (Wh)',
+                        data: chartData.data,
+                        borderColor: 'rgb(75, 192, 192)',
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    scales: {
+                        y: {
+                            beginAtZero: false, // Allow y-axis to adjust
+                            title: { display: true, text: 'Energy (Wh)' }
+                        },
+                        x: {
+                           title: { display: true, text: 'Time' }
+                        }
+                    },
+                    responsive: true,
+                    maintainAspectRatio: true
+                }
+            });
+        }
+    }
+
+    // Add event listeners to timeframe buttons
+    timeframeButtons.forEach(button => {
+        button.addEventListener('click', () => {
+            // Remove active class from all buttons
+            timeframeButtons.forEach(btn => btn.classList.remove('active'));
+            // Add active class to the clicked button
+            button.classList.add('active');
+            // Store selected timeframe
+            selectedTimeframe = button.getAttribute('data-timeframe');
+            // Enable run button
+            runButton.disabled = false;
+            console.log("Selected timeframe:", selectedTimeframe);
+        });
+    });
+
+    // Add event listener to run forecast button
+    runButton.addEventListener('click', () => {
+        if (!selectedTimeframe) {
+            alert('Please select a timeframe first.');
+            return;
+        }
+
+        runButton.disabled = true; // Disable button during request
+        loadingIndicator.style.display = 'inline'; // Show loading indicator
+        console.log("Running forecast for:", selectedTimeframe);
+
+        // Make AJAX request to the Flask backend
+        fetch('/run_forecast', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ timeframe: selectedTimeframe }),
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log("Forecast data received:", data);
+            if (data.error) {
+                alert("Error generating forecast: " + data.error);
+            } else {
+                 // Initialize or update chart with received data
+                renderChart(data);
+            }
+        })
+        .catch(error => {
+            console.error('Error fetching forecast:', error);
+            alert('An error occurred while fetching the forecast.');
+        })
+        .finally(() => {
+             // Re-enable button and hide indicator regardless of success/failure
+            if (selectedTimeframe) runButton.disabled = false;
+            loadingIndicator.style.display = 'none';
+        });
+    });
+
+    // Initialize chart with empty data on page load
+    renderChart({ labels: [], data: [] });
+
+</script>
+{% endblock %}

@@ -73,7 +73,7 @@ def create_lagged_features(data, target_col='Global_active_power'):
     return data.dropna()
 
 # Forecasting
-def recursive_forecast(model, last_observed_window):
+def predict_on_window(model, last_observed_window):
     predictions = model.predict(last_observed_window)
     print("X_test columns:", type(last_observed_window))
     predictions = pd.Series(predictions, index=last_observed_window.index)  # Add datetime index
