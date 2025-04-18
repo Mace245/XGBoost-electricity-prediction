@@ -18,7 +18,6 @@ try:
     from lib.data import temp_fetch
 except ImportError as e:
     print(f"ERROR: Could not import temp_fetch from lib.data: {e}")
-    print("Ensure 'lib/data.py' exists and 'lib/__init__.py' is present.")
     temp_fetch = None
 
 # --- Configuration (Keep as before) ---
@@ -112,10 +111,7 @@ def background_ntp_checker_compare_hour():
 
 # --- Flask Routes ---
 @app.route('/')
-def home(): return redirect(url_for('dashboard'))
-
-@app.route('/dashboard')
-def dashboard(): return render_template('dashboard.html')
+def home(): return redirect(url_for('forecast_view'))
 
 # --- MODIFIED /database Route ---
 @app.route('/database')
