@@ -4,7 +4,7 @@ from scipy.stats import zscore
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 import matplotlib.pyplot as plt
 from collections import namedtuple
-from lib import algo
+import algo
 
 import openmeteo_requests
 import requests_cache
@@ -156,6 +156,7 @@ def visualize(model, features:list[str], target_var:str, forecast:pd.Series, for
 
     # get importance
     importance = model.feature_importances_
+    print(importance)
     plt.bar(range(len(importance)), importance, align='center')
     plt.xticks(ticks=range(len(features)), labels=features, rotation=45)
     plt.ylabel("Importance Score")
