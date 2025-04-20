@@ -3,10 +3,8 @@
 {% block title %}Energy Forecast{% endblock %}
 
 {% block content %}
-    <h2>Energy Usage Forecast</h2>
 
     <div id="currentUsage" class="shadow-sm">
-        <h4>Latest Reading</h4>
         {% if latest_reading %}
         <p>
             <strong>Time (UTC):</strong> {{ latest_reading.DateTime }} <br>
@@ -18,7 +16,6 @@
         {% endif %}
     </div>
 
-    <h4>Prediction Settings</h4>
     <div class="btn-group mb-3" role="group" aria-label="Forecast timeframe">
       <button type="button" class="btn btn-outline-primary timeframe-btn" data-timeframe="1day">1 Day</button>
       <button type="button" class="btn btn-outline-primary timeframe-btn" data-timeframe="3days">3 Days</button>
@@ -27,7 +24,6 @@
     <button id="run-forecast" class="btn btn-success mb-3" disabled>Run Forecast</button>
     <span id="loading-indicator" style="display: none;">Loading...</span>
 
-    <h4>Forecast Graph</h4>
     <canvas id="forecastChart" width="400" height="200"></canvas>
 
 {% endblock %}

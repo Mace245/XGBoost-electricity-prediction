@@ -98,7 +98,6 @@ def predict_on_window_recursive(
     model_features: list,
     target_variable: str,
     max_lag: int,
-    # api_timezone: str # Assuming history_df and future_temps_series are already in the correct timezone
 ):
     if model is None:
         raise ValueError("Model not loaded.")
@@ -111,13 +110,9 @@ def predict_on_window_recursive(
     if future_temps_series.index.tz != history_df.index.tz:
          raise ValueError("Timezones of history_df and future_temps_series must match.")
 
-
-    # Determine start time for forecasting
     last_known_time = history_df.index[-1]
     forecast_start_dt = last_known_time + pd.Timedelta(hours=1)
 
-    # Combine history and future predictions as we go
-    # Use only the target variable column for lag lookups
     current_data = history_df[[target_variable]].copy()
 
     predictions_list = []

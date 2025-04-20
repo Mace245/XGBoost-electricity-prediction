@@ -6,7 +6,7 @@ import pandas as pd
 features = [
     'hour', 'day_of_week', 'day_of_month', 'is_weekend',
 
-    'lag_1',
+    'lag_1','lag_24','lag_168',
     'temperature'
 ]
 target = 'Wh'
