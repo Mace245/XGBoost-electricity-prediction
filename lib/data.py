@@ -1,14 +1,16 @@
+# data.py - (Only showing the modified visualize function and necessary imports)
+# Keep all other functions (temp_fetch, fetch_elec_temp, handle_outliers, prepare_data, create_training_data) AS IS.
+
 import pandas as pd
 import numpy as np
-from scipy.stats import zscore
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 import matplotlib.pyplot as plt
-from collections import namedtuple
-import algo
+import algo # Keep other imports as they are
 
+from scipy.stats import zscore
+from collections import namedtuple
 import openmeteo_requests
 import requests_cache
-import pandas as pd
 from retry_requests import retry
 
 def temp_fetch(start_date, end_date, latitude:float, longitude:float, historical:bool):
@@ -113,8 +115,8 @@ def prepare_data(electricity_data:pd.DataFrame, temperature_data:pd.DataFrame):
     print(merged_data)
     
     # Handle missing values and outliers
-    # merged_data = merged_data.ffill().dropna()
-    # merged_data = handle_outliers(merged_data)
+    merged_data = merged_data.ffill().dropna()
+    merged_data = handle_outliers(merged_data)
     # merged_data.to_csv('training_data.csv', index=True)
     return merged_data
 
@@ -136,31 +138,70 @@ def create_training_data(features:list[str], target:str):
     merged_data.to_csv('training_data.csv', index=True)
     return training_data(X=X, y=y)
 
-def visualize(model, features:list[str], target_var:str, forecast:pd.Series, forecast_period:pd.Timedelta):
-    mse = mean_squared_error(target_var.loc[target_var.index > target_var.index.max() - forecast_period], forecast)
-    mae = mean_absolute_error(target_var.loc[target_var.index > target_var.index.max() - forecast_period], forecast)
-    rmse = np.sqrt(mse)
-    mape = np.mean(np.abs((target_var.loc[target_var.index > target_var.index.max() - forecast_period] - forecast) / target_var.loc[target_var.index > target_var.index.max() - forecast_period])) * 100
+def visualize(model, features:list[str], actual_values:pd.Series, forecast_values:pd.Series, period_label:str):
+    """
+    Calculates metrics and visualizes the forecast against actual values for a specific period.
 
-    print(f"Mean Squared Error: {mse}")
-    print(f"Mean Absolute Error: {mae}")
-    print(f"Root Mean Squared Error: {rmse}")
-    print(f"Mean Absolute Percentage Error: {mape:.2f}%")
+    Args:
+        model: Trained XGBoost model object.
+        features: List of feature names used by the model.
+        actual_values: Pandas Series of the true target values for the evaluation period.
+        forecast_values: Pandas Series of the predicted values for the evaluation period.
+        period_label: String label for the period (e.g., "7-Day Verification", "Next 7 Days Forecast").
+    """
+    # Ensure indices align for comparison, drop any NaNs that might result
+    comparison_df = pd.DataFrame({'Actual': actual_values, 'Forecast': forecast_values}).dropna()
+
+    if comparison_df.empty:
+        print(f"Warning: No overlapping data between actuals and forecast for period '{period_label}'. Cannot calculate metrics.")
+        # Optionally plot forecast if available
+        if not forecast_values.empty:
+             plt.figure(figsize=(12, 6))
+             plt.plot(forecast_values, label='Forecast Only', linestyle='--')
+             plt.title(f"{period_label} (No Actuals for Comparison)")
+             plt.legend()
+             plt.show()
+        return
+
+    actuals_aligned = comparison_df['Actual']
+    forecast_aligned = comparison_df['Forecast']
+
+    mse = mean_squared_error(actuals_aligned, forecast_aligned)
+    mae = mean_absolute_error(actuals_aligned, forecast_aligned)
+    rmse = np.sqrt(mse)
+
+
+    print(f"Mean Squared Error (MSE): {mse}")
+    print(f"Mean Absolute Error (MAE): {mae}")
+    print(f"Root Mean Squared Error (RMSE): {rmse}")
 
     # Visualize
-    # plt.figure(figsize=(12, 6))
-    plt.plot(target_var.loc[target_var.index > target_var.index.max() - forecast_period], label='Historical')
-    plt.plot(forecast, label='Forecast', linestyle='--')
-    plt.title(forecast_period)
+    plt.figure(figsize=(12, 6))
+    plt.plot(actuals_aligned.index, actuals_aligned, label='Actual')
+    plt.plot(forecast_aligned.index, forecast_aligned, label='Forecast', linestyle='--')
+    plt.title(f"{period_label} Comparison (RMSE: {rmse:.2f})")
+    plt.xlabel("DateTime")
+    plt.ylabel("Wh")
     plt.legend()
     plt.show()
 
-    # get importance
-    importance = model.feature_importances_
-    print(importance)
-    plt.bar(range(len(importance)), importance, align='center')
-    plt.xticks(ticks=range(len(features)), labels=features, rotation=45)
-    plt.ylabel("Importance Score")
-    plt.title("Feature Importance")
-    plt.show()
+    # Feature importance (optional, can be kept or removed if desired)
+    if model and hasattr(model, 'feature_importances_'):
+        try:
+            importance = model.feature_importances_
+            print("\nFeature Importance:")
+            # Create a Series for easier sorting and display
+            feat_imp = pd.Series(importance, index=features).sort_values(ascending=False)
+            print(feat_imp)
+
+            # Plotting feature importance
+            plt.figure(figsize=(10, 6))
+            feat_imp.plot(kind='bar')
+            plt.ylabel("Importance Score")
+            plt.title("Feature Importance")
+            plt.xticks(rotation=45, ha='right')
+            plt.tight_layout()
+            plt.show()
+        except Exception as e:
+            print(f"Could not plot feature importance: {e}")
 

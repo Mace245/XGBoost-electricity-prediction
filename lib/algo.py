@@ -1,6 +1,6 @@
 import pandas as pd
 import xgboost as xgb
-from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
+from sklearn.model_selection import TimeSeriesSplit
 import numpy as np
 from statsmodels.tsa.seasonal import seasonal_decompose
 
@@ -25,12 +25,73 @@ def add_seasonal_components(data, period=24):
     data['residual'] = decomposition.resid
     return data.dropna()
 
+
+# mape (rmse) = 173, 151
+
+# # Modeling with Optuna hyperparameter optimization
+# def train_xgboost_model(X_train, y_train):
+#     """Train XGBoost model using Optuna for hyperparameter tuning."""
+    
+#     def objective(trial):
+#         param = {
+#             'max_depth': trial.suggest_int('max_depth', 3, 10),
+#             'learning_rate': trial.suggest_float('learning_rate', 0.001, 0.2, log=True),
+#             'n_estimators': trial.suggest_int('n_estimators', 100, 2000),
+#             'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 0.9),
+#             'subsample': trial.suggest_float('subsample', 0.5, 0.9),
+#             'reg_alpha': trial.suggest_float('reg_alpha', 0.001, 1.0,log=True),
+#             'reg_lambda': trial.suggest_float('reg_lambda', 0.001, 1.0, log=True),
+#             'n_jobs': -1,
+#             'eval_metric': 'rmse',
+#             'tree_method': 'hist',
+#             'device': 'cuda'
+#         }
+        
+#         # Initialize the model with early stopping
+#         model = xgb.XGBRegressor(**param, early_stopping_rounds=50)
+#         tss = TimeSeriesSplit(n_splits=3)
+#         scores = []
+        
+#         for train_idx, val_idx in tss.split(X_train):
+#             X_train_fold, X_val_fold = X_train.iloc[train_idx], X_train.iloc[val_idx]
+#             y_train_fold, y_val_fold = y_train.iloc[train_idx], y_train.iloc[val_idx]
+            
+#             model.fit(
+#                 X_train_fold, y_train_fold,
+#                 eval_set=[(X_val_fold, y_val_fold)],
+#                 verbose=False
+#             )
+#             scores.append(model.best_score)
+        
+#         return np.mean(scores)
+    
+#     study = optuna.create_study(direction='minimize')
+#     study.optimize(objective, n_trials=69)
+    
+#     print("Best trial:")
+#     trial = study.best_trial
+#     print(f"  RMSE: {trial.value}")
+#     print("  Best hyperparameters:")
+#     for key, value in trial.params.items():
+#         print(f"    {key}: {value}")
+    
+#     # Build the final model with the best hyperparameters and train on full data
+#     best_params = trial.params
+#     best_params.update({
+#         'n_jobs': -1,
+#         'eval_metric': 'rmse',
+#     })
+    
+#     best_model = xgb.XGBRegressor(**best_params)
+#     best_model.fit(X_train, y_train, verbose=False)
+#     return best_model
+
 # Modeling
 def train_xgboost_model(X_train, y_train):
     """Train with paper-inspired parameters"""
     model = xgb.XGBRegressor(
         max_depth=6,
-        learning_rate=0.01,
+        learning_rate=0.069,
         n_estimators=1000,
         colsample_bytree=0.7,
         subsample=0.8,
@@ -38,8 +99,9 @@ def train_xgboost_model(X_train, y_train):
         reg_lambda=0.1,
         n_jobs=-1,
         early_stopping_rounds=50,
-        eval_metric='mape'
+        eval_metric='rmse',
     )
+    # mape (rmse) = 173, 151
     
     # Time-series cross-validation
     tss = TimeSeriesSplit(n_splits=3)
@@ -68,7 +130,6 @@ def create_lagged_features(data, target_col='Wh', lags=[1, 24, 168]):
 # Forecasting
 def predict_on_window(model, last_observed_window):
     predictions = model.predict(last_observed_window)
-    print("X_test columns:", type(last_observed_window))
     predictions = pd.Series(predictions, index=last_observed_window.index)  # Add datetime index
     return predictions
 

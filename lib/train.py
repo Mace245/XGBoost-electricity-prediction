@@ -2,48 +2,54 @@ import algo, data
 import pickle
 import pandas as pd
 
-LATITUDE = 14.5833
-LONGITUDE = 121.0
-
 # Define features
 features = [
     'hour', 'day_of_week', 'day_of_month', 'is_weekend',
-    'lag_1','lag_24','lag_168',
+    'lag_1', 'lag_24', 'lag_168',
     'temperature'
 ]
 target = 'Wh'
 
-def train(predict:bool, forecast_period_days:int):
-    training_data = pd.read_csv('training_data.csv', parse_dates=['DateTime'])
-    training_data.set_index('DateTime', inplace=True)
-    temp_col = training_data.pop('temperature')
-    training_data.insert(8, 'temperature', temp_col)
 
-    target_data=training_data.drop(columns='Wh')
-    feature_data=training_data.loc[:, 'Wh']
-
+def train(data_db, forecast_period_days:int):
+    cutoff_date = data_db.X.index.max() - pd.Timedelta(days=forecast_period_days)
+    # Filter X to keep only the most recent data_db
+    X_filtered = data_db.X[data_db.X.index >= cutoff_date]
+    
+    # Align y with the filtered X (same index)
+    y_filtered = data_db.y.loc[X_filtered.index]
     # Train model
-    model = algo.train_xgboost_model(target_data, feature_data)
+    model = algo.train_xgboost_model(X_filtered, y_filtered)
 
     # Save artifacts
-    with open('model.pkl', 'wb') as f:
+    model_filename = f'models/model_{forecast_period_days}.pkl'
+    with open(model_filename, 'wb') as f:
         pickle.dump(model, f)
 
-    if predict:
-        forecast_period = pd.Timedelta(days=forecast_period_days)
+def predict(forecast_period_days:int, model, data_db, eval: bool):
+    forecast_period = pd.Timedelta(days=forecast_period_days)
 
-        data.temp_fetch('2023-03-08','2023-03-14', LATITUDE, LONGITUDE, historical=True).to_csv("test.csv")
-        # Generate forecast
-        last_known_data = target_data.loc[target_data.index > target_data.index.max() - forecast_period]  # Last week of data
-        forecast = algo.predict_on_window_recursive(
-            model=model, 
-            history_df= training_data, 
-            future_temps_series=data.temp_fetch('2023-03-07','2023-03-14', LATITUDE, LONGITUDE, historical=True), hours_to_forecast=forecast_period_days*24, model_features=features, target_variable=target, max_lag=168)
+    # Generate forecast
+    last_known_data = data_db.X.loc[data_db.X.index > data_db.X.index.max() - forecast_period]  # Last week of data
+    # last_known_data = pd.DataFrame(index=last_known_data.index)
+    forecast = algo.predict_on_window(model, last_known_data)
+
+    # print(last_known_data)x
+    
+    if eval:
+        data.visualize(model, features, data_db.y, forecast, forecast_period)
         print(last_known_data)
 
-        forecast.to_csv('forecast.csv')
 
-        data.visualize(model, features, feature_data, forecast, forecast_period)
+db_data = data.create_training_data(features,target) 
 
-# data.create_training_data(features,target)
-train(True, 7)
+days = [1,2,3,4,5,6,7,8,9,10,11,12,13,14]
+for i in days:
+    forecast_days = i
+    print('days: ', i)
+    train(db_data, forecast_days)
+
+    model_filename = f'models/model_{forecast_days}.pkl'
+    model_file = open(model_filename, 'rb')
+    model = pickle.load(model_file)
+    predict(forecast_days, model, db_data, False)
