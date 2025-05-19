@@ -5,7 +5,7 @@ import data
 import algo
 
 train = False
-TEST_SET_HOURS = 24 * 1
+TEST_SET_HOURS = 24 * 7
 
 features_list = [
 'hour', 'day_of_week', 'day_of_month', 'is_weekend',
@@ -62,7 +62,7 @@ def predict_dms(
         forecast_timestamps.append(current_forecast_dt)
 
         # Load the specialized model for horizon 'h'
-        model_filename = f"{models_base_path}dms_model_horizon_{h}h.pkl" # Or your _TEST filename
+        model_filename = f"{models_base_path}dms_model_horizon_{h}h.pkl"
         try:
             with open(model_filename, 'rb') as f:
                 model_h = pickle.load(f)
@@ -241,7 +241,8 @@ if __name__ == "__main__":
             dms_forecast_series=dms_test_predictions,
             actual_values_series=test_actuals_series,
             period_label=f"DMS {TEST_SET_HOURS}-Hour Test Set Evaluation",
-            models_for_importance=models_to_inspect_for_viz if models_to_inspect_for_viz else None
+            models_for_importance=models_to_inspect_for_viz if models_to_inspect_for_viz else None,
+            features_list=features_list
         )
     else:
         print("Could not generate predictions or actuals for evaluation.")

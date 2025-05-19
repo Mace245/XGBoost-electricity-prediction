@@ -1,6 +1,3 @@
-# data.py - (Only showing the modified visualize function and necessary imports)
-# Keep all other functions (temp_fetch, fetch_elec_temp, handle_outliers, prepare_data, create_training_data) AS IS.
-
 import pandas as pd
 import numpy as np
 from sklearn.metrics import mean_squared_error, mean_absolute_error
@@ -14,13 +11,10 @@ import requests_cache
 from retry_requests import retry
 
 def temp_fetch(start_date, end_date, latitude:float, longitude:float, historical:bool):
-	# Setup the Open-Meteo API client with cache and retry on error
 	cache_session = requests_cache.CachedSession('.cache', expire_after = 3600)
 	retry_session = retry(cache_session, retries = 5, backoff_factor = 0.2)
 	openmeteo = openmeteo_requests.Client(session = retry_session)
 
-	# Make sure all required weather variables are listed here
-	# The order of variables in hourly or daily is important to assign them correctly below
 	if historical == True:
 		url = "https://archive-api.open-meteo.com/v1/archive"
 	else:
@@ -34,15 +28,8 @@ def temp_fetch(start_date, end_date, latitude:float, longitude:float, historical
 		"end_date": end_date
 	}
 	responses = openmeteo.weather_api(url, params=params)
-
-	# Process first location. Add a for-loop for multiple locations or weather models
 	response = responses[0]
-	# print(f"Coordinates {response.Latitude()}°N {response.Longitude()}°E")
-	# print(f"Elevation {response.Elevation()} m asl")
-	# print(f"Timezone {response.Timezone()} {response.TimezoneAbbreviation()}")
-	# print(f"Timezone difference to GMT+0 {response.UtcOffsetSeconds()} s")
 
-	# Process hourly data. The order of variables needs to be the same as requested.
 	hourly = response.Hourly()
 	hourly_temperature_2m = hourly.Variables(0).ValuesAsNumpy()
 
@@ -73,22 +60,14 @@ def fetch_elec_temp():
     electricity_data.set_index('DateTime', inplace=True)
     electricity_data = electricity_data.drop(columns='Global_active_power')
     
-    # Load temperature data
-    # temperature_data = pd.read_csv('open-meteo-unix 20nov-22jan.csv')
-    # temperature_data['time'] = pd.to_datetime(temperature_data['time'], unit='s')
-    # temperature_data = temperature_data.set_index('time')[['temperature']]
-
-    # Compute the formatted start and end dates
     start_date = electricity_data.index.min().strftime('%Y-%m-%d')
     end_date = electricity_data.index.max().strftime('%Y-%m-%d')
     electricity_data = electricity_data.tz_localize('Asia/Kuala_Lumpur')
     print(start_date, end_date)
 
-    # Define the location coordinates
     latitude = 14.5833
     longitude = 121
 
-    # Call the function with clearly named parameters
     temperature_data = temp_fetch(
         start_date=start_date,
         end_date=end_date,
@@ -100,33 +79,23 @@ def fetch_elec_temp():
     return electricity_data, temperature_data
 
 def handle_outliers(data, column='Wh', threshold=3):
-    """Remove outliers using Z-score"""
     z_scores = zscore(data[column])
     return data[(np.abs(z_scores) < threshold)]
 
 def prepare_data(electricity_data:pd.DataFrame, temperature_data:pd.DataFrame):
-    # Resample electricity data to hourly
-    # electricity_hourly = electricity_data.resample('h').mean()
-    # electricity_hourly = electricity_hourly.head(1536) # temp for invalid merge
-    # print(electricity_hourly.info(), temperature_data.info())
-    #     
-    # Merge electricity and temperature data
+
     merged_data = electricity_data.merge(temperature_data, how='left', left_index=True, right_index=True)
     print(merged_data)
     
-    # Handle missing values and outliers
     merged_data = merged_data.ffill().dropna()
     merged_data = handle_outliers(merged_data)
-    # merged_data.to_csv('training_data.csv', index=True)
     return merged_data
 
 def create_training_data(features:list[str], target:str):
     training_data = namedtuple("training_data", ['X', 'y'])
-    # Load data
     electricity, temperature = fetch_elec_temp()
     merged_data = prepare_data(electricity, temperature)
 
-    # Feature engineering pipeline
     merged_data = algo.create_time_features(merged_data)
     merged_data = algo.create_lagged_features(merged_data)
     # merged_data = algo.add_seasonal_components(merged_data)
@@ -142,7 +111,7 @@ def create_dms_training_data_for_horizon(
     merged_data_full: pd.DataFrame,
     features_list: list[str],
     target_col: str,
-    horizon: int # Number of steps ahead to predict (e.g., 1 for 1-hour, 24 for 24-hours)
+    horizon: int 
 ):
     """
     Prepares X and y for training a DMS model for a specific horizon.
@@ -180,7 +149,7 @@ def create_dms_training_data_for_horizon(
 def create_dms_feature_set_for_prediction(
     history_df_slice: pd.DataFrame, # Slice of history ending at current time 't'
     features_list: list[str],
-    target_col: str # e.g., 'Wh'
+    target_col: str
 ):
     """
     Creates the feature set (a single row) for time 't' to be used for DMS prediction.
@@ -191,9 +160,6 @@ def create_dms_feature_set_for_prediction(
         raise ValueError("history_df_slice cannot be empty.")
 
     current_time_t = history_df_slice.index[-1]
-    
-    # We need enough history to calculate the maximum lag.
-    # This function assumes history_df_slice is already sufficient.
     
     # Create features for the *last row* of history_df_slice
     # 1. Time features for 't'
@@ -233,7 +199,7 @@ def create_dms_feature_set_for_prediction(
     # Handle any NaNs (e.g., if a lag went too far back for the provided history_df_slice)
     final_feature_row = final_feature_row.fillna(method='ffill').fillna(method='bfill').fillna(0) # Basic imputation
 
-    return final_feature_row # Should be a single row DataFrame
+    return final_feature_row
 
 def visualize(model, features:list[str], actual_values:pd.Series, forecast_values:pd.Series, period_label:str):
     """
@@ -303,35 +269,16 @@ def visualize(model, features:list[str], actual_values:pd.Series, forecast_value
             print(f"Could not plot feature importance: {e}")
 
 def visualize_dms_forecast(
-    dms_forecast_series: pd.Series,    # Pandas Series of the combined DMS forecast values, indexed by DateTime
-    actual_values_series: pd.Series, # Pandas Series of the true target values for the same period
-    period_label: str,               # String label for the period (e.g., "Next 24 Hours DMS Forecast")
-    models_for_importance: dict = None # Optional: Dict {horizon_h: trained_model_h} if you want feature importance
-                                       # e.g., {1: model_h1, 24: model_h24} to show importance for specific horizons
-                                       # If None, feature importance is skipped.
-                                       # Requires 'features_list' to be passed or accessible if models_for_importance is given.
-                                       # For simplicity, assuming features_list is globally accessible or passed if needed.
+    dms_forecast_series: pd.Series,   
+    actual_values_series: pd.Series, 
+    period_label: str,
+    features_list: list[str],
+    models_for_importance: dict = None,
 ):
-    """
-    Calculates metrics and visualizes the combined DMS forecast against actual values.
-    Optionally displays feature importance for specified horizon models.
-
-    Args:
-        dms_forecast_series: Forecasted values from the DMS system.
-        actual_values_series: True target values.
-        period_label: Label for titles and prints.
-        models_for_importance: Dictionary mapping horizon (int) to the trained XGBoost model for that horizon.
-    """
-    global features_list # Assuming features_list is defined globally in the scope where this is called
-                        # Or pass it as an argument: visualize_dms_forecast(..., features_list_param=None)
-
-    # Ensure indices align for comparison, drop any NaNs that might result from misalignment
-    # This is crucial if dms_forecast_series and actual_values_series don't perfectly overlap
     comparison_df = pd.DataFrame({'Actual': actual_values_series, 'Forecast': dms_forecast_series}).dropna()
 
     if comparison_df.empty:
         print(f"Warning: No overlapping data between actuals and DMS forecast for period '{period_label}'. Cannot calculate metrics.")
-        # Optionally plot forecast if available
         if not dms_forecast_series.empty:
             plt.figure(figsize=(15, 7))
             plt.plot(dms_forecast_series.index, dms_forecast_series, label='DMS Forecast Only', linestyle='--')
@@ -363,7 +310,7 @@ def visualize_dms_forecast(
     # Visualize Forecast vs Actual
     plt.figure(figsize=(15, 7))
     plt.plot(actuals_aligned.index, actuals_aligned, label='Actual Values', marker='.', linestyle='-')
-    plt.plot(forecast_aligned.index, forecast_aligned, label='DMS Forecast', marker='x', linestyle='--')
+    plt.plot(forecast_aligned.index, forecast_aligned, label='DMS Forecast', marker='.', linestyle='--')
     plt.title(f"{period_label} Comparison\nRMSE: {rmse:.2f} | MAE: {mae:.2f} | MAPE: {mape:.2f}%")
     plt.xlabel("DateTime")
     plt.ylabel("Wh") # Or your target variable name
@@ -375,11 +322,11 @@ def visualize_dms_forecast(
     # Feature importance
     if models_for_importance and isinstance(models_for_importance, dict):
         # Check if features_list is available
-        if 'features_list' not in globals() and not hasattr(visualize_dms_forecast, 'features_list_param'):
+        if features_list and not hasattr(visualize_dms_forecast, 'features_list_param'):
              print("Warning: 'features_list' not found globally or passed as param. Cannot display feature importance.")
              return # Or pass features_list as an argument to visualize_dms_forecast
 
-        current_features_list = globals().get('features_list') # Or use the passed parameter
+        current_features_list = features_list # Or use the passed parameter
 
         if not current_features_list:
             print("Warning: 'features_list' is empty. Cannot display feature importance.")
