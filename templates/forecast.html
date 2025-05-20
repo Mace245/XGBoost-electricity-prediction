@@ -1,52 +1,91 @@
 {% extends 'layout.html' %}
 
-{% block title %}Energy Forecast{% endblock %}
+{% block title %}Energy Forecast (DMS){% endblock %}
 
 {% block content %}
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2>Energy Forecast (DMS)</h2>
+        <div>
+            <form action="{{ url_for('trigger_manual_retrain_route') }}" method="POST" style="display:inline-block;">
+                <button type="submit" class="btn btn-warning btn-sm">Trigger Manual Retrain</button>
+            </form>
+            <!-- Removed Inject Data button -->
+        </div>
+    </div>
 
-    <div id="currentUsage" class="shadow-sm">
+    <div class="shadow-sm p-3 mb-3 bg-light rounded">
+        <h5>Latest Recorded Data:</h5>
         {% if latest_reading %}
-        <p>
-            <strong>Time (UTC):</strong> {{ latest_reading.DateTime }} <br>
-            <strong>Energy (Wh):</strong> {{ "%.2f"|format(latest_reading.DailyEnergy) if latest_reading.DailyEnergy is not none else 'N/A' }} <br> {# Using DailyEnergy as Wh placeholder #}
-            <strong>Temperature (Celsius):</strong> {{ "%.2f"|format(latest_reading.Temperature) if latest_reading.Temperature is not none else 'N/A' }}
+        <p class="mb-0">
+            <strong>Time ({{ latest_reading.timestamp_display.split(' ')[-1] if latest_reading.timestamp_display else 'Local' }}):</strong> {{ latest_reading.timestamp_display.rsplit(' ', 1)[0] if latest_reading.timestamp_display else 'N/A' }} <br>
+            <strong>Energy (Wh):</strong> {{ latest_reading.EnergyWh if latest_reading.EnergyWh is not none else 'N/A' }} <br>
+            <strong>Temperature (°C):</strong> {{ latest_reading.TemperatureCelsius if latest_reading.TemperatureCelsius is not none else 'N/A' }}
         </p>
         {% else %}
-        <p class="text-muted">No data available yet.</p>
+        <p class="text-muted mb-0">No historical data recorded yet.</p>
         {% endif %}
     </div>
 
+    <p>Select forecast timeframe (Max available: {{ max_forecast_hours }} hours):</p>
     <div class="btn-group mb-3" role="group" aria-label="Forecast timeframe">
-      <button type="button" class="btn btn-outline-primary timeframe-btn" data-timeframe="1day">1 Day</button>
-      <button type="button" class="btn btn-outline-primary timeframe-btn" data-timeframe="3days">3 Days</button>
-      <button type="button" class="btn btn-outline-primary timeframe-btn" data-timeframe="1week">1 Week</button>
+      <button type="button" class="btn btn-outline-primary timeframe-btn" data-timeframe="24h">1 Day (24h)</button>
+      <button type="button" class="btn btn-outline-primary timeframe-btn" data-timeframe="72h">3 Days (72h)</button>
+      <button type="button" class="btn btn-outline-primary timeframe-btn" data-timeframe="168h">1 Week (168h)</button>
+      {% if max_forecast_hours and max_forecast_hours > 168 and max_forecast_hours % 24 == 0 %}
+      <button type="button" class="btn btn-outline-primary timeframe-btn" data-timeframe="{{ max_forecast_hours }}h">{{ max_forecast_hours // 24 }} Days ({{max_forecast_hours}}h)</button>
+      {% elif max_forecast_hours and max_forecast_hours > 168 %}
+       <button type="button" class="btn btn-outline-primary timeframe-btn" data-timeframe="{{ max_forecast_hours }}h">Max ({{max_forecast_hours}}h)</button>
+      {% endif %}
     </div>
     <button id="run-forecast" class="btn btn-success mb-3" disabled>Run Forecast</button>
-    <span id="loading-indicator" style="display: none;">Loading...</span>
+    <span id="loading-indicator" style="display: none;"> <div class="spinner-border spinner-border-sm text-primary" role="status"></div> Loading forecast...</span>
+    <div id="forecast-error-message" class="alert alert-danger mt-2" style="display: none;" role="alert"></div>
 
-    <canvas id="forecastChart" width="400" height="200"></canvas>
-
+    <div style="height: 400px;">
+        <canvas id="forecastChart"></canvas>
+    </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-    let selectedTimeframe = null;
+    // JavaScript for forecast.html remains largely the same as your last version.
+    // Key things:
+    // - Ensure `fetch("{{ url_for('run_forecast_dms_api') }}", ...)` is used.
+    // - The `selectedTimeframeValue` from `data-timeframe` (e.g., "24h") is sent in the JSON body.
+    // - Chart rendering logic handles the labels and data from the API response.
+    // (Using the JS from your last forecast.html as a base)
+
+    let selectedTimeframeValue = null;
     const timeframeButtons = document.querySelectorAll('.timeframe-btn');
     const runButton = document.getElementById('run-forecast');
     const loadingIndicator = document.getElementById('loading-indicator');
-    const ctx = document.getElementById('forecastChart').getContext('2d');
-    let forecastChart = null; // Initialize chart variable
+    const forecastErrorMessageDiv = document.getElementById('forecast-error-message');
+    const ctxForecast = document.getElementById('forecastChart').getContext('2d');
+    let forecastChartInstance = null;
 
-    // Function to initialize or update the chart
-    function renderChart(chartData) {
-        if (forecastChart) {
-            // Update existing chart
-            forecastChart.data.labels = chartData.labels;
-            forecastChart.data.datasets[0].data = chartData.data;
-            forecastChart.update();
+    function renderForecastChart(chartData) {
+        // ... (same renderForecastChart JS as in your previous forecast.html) ...
+        // ... ensure it handles chartData.labels and chartData.data ...
+        // ... and sets chart title appropriately ...
+        forecastErrorMessageDiv.style.display = 'none';
+        if (!chartData || !chartData.labels || chartData.labels.length === 0) {
+            forecastErrorMessageDiv.textContent = 'No forecast data received or data is empty.';
+            forecastErrorMessageDiv.style.display = 'block';
+            if (forecastChartInstance) {
+                forecastChartInstance.data.labels = [];
+                forecastChartInstance.data.datasets[0].data = [];
+                forecastChartInstance.update();
+            }
+            return;
+        }
+
+        if (forecastChartInstance) {
+            forecastChartInstance.data.labels = chartData.labels;
+            forecastChartInstance.data.datasets[0].data = chartData.data;
+            forecastChartInstance.options.plugins.title.text = `Forecasted Energy (${selectedTimeframeValue})`;
+            forecastChartInstance.update();
         } else {
-            // Create new chart
-            forecastChart = new Chart(ctx, {
+            forecastChartInstance = new Chart(ctxForecast, {
                 type: 'line',
                 data: {
                     labels: chartData.labels,
@@ -54,88 +93,73 @@
                         label: 'Forecasted Energy (Wh)',
                         data: chartData.data,
                         borderColor: 'rgb(75, 192, 192)',
-                        tension: 0.1
+                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        tension: 0.1,
+                        fill: true
                     }]
                 },
                 options: {
                     scales: {
-                        y: {
-                            beginAtZero: false, // Allow y-axis to adjust
-                            title: { display: true, text: 'Energy (Wh)' }
-                        },
-                        x: {
-                           title: { display: true, text: 'Time' }
-                        }
+                        y: { beginAtZero: false, title: { display: true, text: 'Energy (Wh)' } },
+                        x: { title: { display: true, text: 'Time (Local)' } } // Assuming labels from API are local
                     },
                     responsive: true,
-                    maintainAspectRatio: true
+                    maintainAspectRatio: false,
+                    plugins: {
+                        title: { display: true, text: `Forecasted Energy (${selectedTimeframeValue})` },
+                        tooltip: { callbacks: { title: function(tooltipItems) { return tooltipItems[0].label; } } }
+                    }
                 }
             });
         }
     }
 
-    // Add event listeners to timeframe buttons
+
     timeframeButtons.forEach(button => {
         button.addEventListener('click', () => {
-            // Remove active class from all buttons
-            timeframeButtons.forEach(btn => btn.classList.remove('active'));
-            // Add active class to the clicked button
-            button.classList.add('active');
-            // Store selected timeframe
-            selectedTimeframe = button.getAttribute('data-timeframe');
-            // Enable run button
+            timeframeButtons.forEach(btn => btn.classList.remove('active', 'btn-primary'));
+            timeframeButtons.forEach(btn => btn.classList.add('btn-outline-primary'));
+            button.classList.add('active', 'btn-primary');
+            button.classList.remove('btn-outline-primary');
+            selectedTimeframeValue = button.getAttribute('data-timeframe');
             runButton.disabled = false;
-            console.log("Selected timeframe:", selectedTimeframe);
         });
     });
 
-    // Add event listener to run forecast button
     runButton.addEventListener('click', () => {
-        if (!selectedTimeframe) {
-            alert('Please select a timeframe first.');
-            return;
-        }
+        if (!selectedTimeframeValue) { alert('Please select a timeframe.'); return; }
+        runButton.disabled = true;
+        loadingIndicator.style.display = 'inline-block';
+        forecastErrorMessageDiv.style.display = 'none';
 
-        runButton.disabled = true; // Disable button during request
-        loadingIndicator.style.display = 'inline'; // Show loading indicator
-        console.log("Running forecast for:", selectedTimeframe);
-
-        // Make AJAX request to the Flask backend
-        fetch('/run_forecast', {
+        fetch("{{ url_for('run_forecast_dms_api') }}", {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ timeframe: selectedTimeframe }),
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ timeframe: selectedTimeframeValue }),
         })
         .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
+            if (!response.ok) { return response.json().then(err => { throw new Error(err.error || `HTTP error ${response.status}`) }); }
             return response.json();
         })
         .then(data => {
-            console.log("Forecast data received:", data);
             if (data.error) {
-                alert("Error generating forecast: " + data.error);
+                forecastErrorMessageDiv.textContent = "Error: " + data.error;
+                forecastErrorMessageDiv.style.display = 'block';
+                renderForecastChart({ labels: [], data: [] });
             } else {
-                 // Initialize or update chart with received data
-                renderChart(data);
+                renderForecastChart(data);
             }
         })
         .catch(error => {
-            console.error('Error fetching forecast:', error);
-            alert('An error occurred while fetching the forecast.');
+            forecastErrorMessageDiv.textContent = 'Fetch error: ' + error.message;
+            forecastErrorMessageDiv.style.display = 'block';
+            renderForecastChart({ labels: [], data: [] });
         })
         .finally(() => {
-             // Re-enable button and hide indicator regardless of success/failure
-            if (selectedTimeframe) runButton.disabled = false;
+            if (selectedTimeframeValue) runButton.disabled = false;
             loadingIndicator.style.display = 'none';
         });
     });
-
-    // Initialize chart with empty data on page load
-    renderChart({ labels: [], data: [] });
-
+    renderForecastChart({ labels: [], data: [] }); // Initial empty chart
 </script>
 {% endblock %}

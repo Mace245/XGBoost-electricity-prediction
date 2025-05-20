@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 import matplotlib.pyplot as plt
-import algo # Keep other imports as they are
+from lib import algo # Keep other imports as they are
 
 from scipy.stats import zscore
 from collections import namedtuple
@@ -77,6 +77,47 @@ def fetch_elec_temp():
     )
     
     return electricity_data, temperature_data
+
+from collections import namedtuple # Ensure this is imported
+
+# This function will be called by the training script/app
+def get_all_data_from_db_for_training(db_session, energy_temp_reading_model, 
+                                      output_df_target_col: str, output_df_temp_col: str,
+                                      model_actual_target_attr: str, model_actual_temp_attr: str):
+    """
+    Fetches all data from the EnergyTempReading database and prepares it
+    into a pandas DataFrame suitable for training.
+    Returns a DataFrame with a DatetimeIndex (UTC) and columns for target and temperature.
+    """
+    print("Fetching all data from database for training...")
+    all_readings_query = db_session.query(energy_temp_reading_model).order_by(energy_temp_reading_model.timestamp_utc).all()
+
+    if not all_readings_query:
+        print("No data in the database to train on.")
+        return pd.DataFrame()
+
+    df_data = []
+    for r in all_readings_query:
+        df_data.append({
+            'DateTime': pd.to_datetime(r.timestamp_utc, utc=True),
+            output_df_target_col: getattr(r, model_actual_target_attr, None),
+            output_df_temp_col: getattr(r, model_actual_temp_attr, None)
+        })
+
+    df = pd.DataFrame(df_data)
+    if df.empty:
+        return df
+
+    df = df.set_index('DateTime')
+    # df = df.sort_index() # Ensure sorted by time
+
+    # Handle potential missing values if any (though DB should be clean)
+    # df[target_col_name] = df[target_col_name].astype(float)
+    # df[temp_col_name] = df[temp_col_name].astype(float)
+    # df = df.ffill().bfill() # Example imputation, adjust as needed
+
+    print(f"Fetched {len(df)} records from DB. TZ: {df.index.tz}")
+    return df
 
 def handle_outliers(data, column='Wh', threshold=3):
     z_scores = zscore(data[column])
