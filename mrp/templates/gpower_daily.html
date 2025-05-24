@@ -123,9 +123,9 @@
 
                 // --- Update Chart ---
                 if (powerChart) {
-                    powerChart.data.labels = chartData.labels;
+                    powerChart.data.labels = chartData.dailyLabels;
                      if (powerChart.data.datasets && powerChart.data.datasets.length > 0) {
-                         powerChart.data.datasets[0].data = chartData.powerData; // *** USE powerData ***
+                         powerChart.data.datasets[0].data = chartData.dailyMaxValues; // *** USE powerData ***
                     }
                     powerChart.update();
                     console.log("Power chart updated.");

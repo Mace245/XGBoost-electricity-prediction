@@ -9,33 +9,27 @@ import pandas as pd
 import numpy as np
 from flask import Flask, render_template, jsonify, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
-from antares_http import antares # Assuming this is correctly installed and configured
-
-# Assuming data.py and algo.py are in the same directory or accessible via PYTHONPATH
-from lib import data # Your data.py module
-from lib import algo # Your algo.py module
+from antares_http import antares
+from lib import data 
+from lib import algo 
 
 # --- Configuration ---
-ANTARES_ACCESS_KEY = os.getenv('ANTARES_ACCESS_KEY', 'YOUR_ANTARES_ACCESS_KEY') # Use environment variables
-ANTARES_PROJECT_NAME = os.getenv('ANTARES_PROJECT_NAME', 'YOUR_ANTARES_PROJECT_NAME')
-ANTARES_DEVICE_NAME = os.getenv('ANTARES_DEVICE_NAME', 'YOUR_ANTARES_DEVICE_NAME')
+ANTARES_ACCESS_KEY = '5cd4cda046471a89:75f9e1c6b34bf41a'
+ANTARES_PROJECT_NAME = 'UjiCoba_TA'
+ANTARES_DEVICE_NAME = 'TA_DKT1'
 
 DATABASE_FILE = 'energy_app_dms_simplified.db'
-# For background data fetching (how often to check if a new hour has started)
-# For hourly data, 60 seconds is too frequent. Check every 5-15 minutes.
+
 BACKGROUND_FETCH_INTERVAL_SECONDS = 15 * 60
 
-LATITUDE_CONFIG = 14.5833 # Consider making these configurable if they change
+LATITUDE_CONFIG = 14.5833
 LONGITUDE_CONFIG = 121.0
-# Timezone for displaying data to the user if different from UTC
 APP_DISPLAY_TIMEZONE = "Asia/Kuala_Lumpur"
 # All internal processing and DB storage will be UTC.
 
 DMS_MODELS_BASE_PATH = 'models_dms/'
-# Max hours the app will offer forecasts for. All models from h=1 to this must be trained.
-MAX_FORECAST_HORIZON_APP = 24 * 7 # 7 days
+MAX_FORECAST_HORIZON_APP = 24 * 7
 
-# Features and target for DMS models (must match what models were trained with)
 DMS_FEATURES_LIST = ['hour', 'day_of_week', 'day_of_month', 'is_weekend',
                      'lag_1', 'lag_24', 'lag_168', 'temperature']
 DMS_TARGET_COL_DATAFRAME = 'Wh'    # Name of the target column in DataFrames for algo/data modules
@@ -63,49 +57,10 @@ db = SQLAlchemy(app)
 app.jinja_env.globals['utc_now'] = lambda: datetime.now(dt_timezone.utc)
 
 
-# --- OpenMeteo Temperature Fetch Utility ---
-# This could also live in data.py if preferred
-import openmeteo_requests
-import requests_cache
-from retry_requests import retry
-
-def fetch_temperature_forecast_openmeteo(start_date_str_utc, end_date_str_utc, latitude, longitude):
-    """Fetches hourly temperature forecast from OpenMeteo for a UTC date range."""
-    cache_session = requests_cache.CachedSession('.cache_openmeteo_app', expire_after=1800) # Cache for 30 mins
-    retry_session = retry(cache_session, retries=3, backoff_factor=0.2)
-    openmeteo = openmeteo_requests.Client(session=retry_session)
-    url = "https://api.open-meteo.com/v1/forecast" # Using the forecast API
-    params = {
-        "latitude": latitude, "longitude": longitude,
-        "hourly": "temperature_2m", "timezone": "UTC", # Explicitly request UTC
-        "start_date": start_date_str_utc, "end_date": end_date_str_utc
-    }
-    try:
-        responses = openmeteo.weather_api(url, params=params)
-        response = responses[0] # Process first location
-        hourly = response.Hourly()
-        hourly_temperature_2m = hourly.Variables(0).ValuesAsNumpy()
-
-        hourly_data_index = pd.date_range(
-            start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
-            end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
-            freq=pd.Timedelta(seconds=hourly.Interval()),
-            inclusive="left"
-        )
-        # Create a Series for easier reindexing later
-        temp_series = pd.Series(data=hourly_temperature_2m, index=hourly_data_index, name='temperature')
-        return temp_series
-    except Exception as e:
-        print(f"Error in fetch_temperature_forecast_openmeteo: {e}")
-        return None
-
 # --- Database Model ---
 class HourlyReading(db.Model): # Renamed for clarity
     id = db.Column(db.Integer, primary_key=True)
-    # Store DateTime as ISO 8601 UTC string (e.g., "2023-10-27T10:00:00Z")
-    # This is a standard and unambiguous way to store datetimes.
     timestamp_utc = db.Column(db.String(20), nullable=False, unique=True, index=True)
-    # Column names match constants for clarity
     EnergyWh = db.Column(db.Float)
     TemperatureCelsius = db.Column(db.Float, nullable=True)
 
@@ -115,119 +70,186 @@ class HourlyReading(db.Model): # Renamed for clarity
 # --- Background Data Collection ---
 last_fetched_hour_utc = None # Keep track of the last hour we successfully fetched data for
 
-def background_data_collector():
-    """Periodically fetches the latest hourly data from Antares and temperature forecast."""
-    global last_fetched_hour_utc
-    print("Background Data Collector started...")
 
-    # On first run, try to determine the last stored hour or start "fresh"
+def background_data_collector():
+    """Periodically fetches data for the CURRENT hour from Antares and temperature forecast."""
+    global last_fetched_hour_utc # If you still want to track the last processed hour to avoid re-processing within the same interval
+    print("Simplified Background Data Collector started (no catch-up)...")
+
+    # Initialize last_fetched_hour_utc based on DB, but only to prevent immediate re-fetch of current hour if app restarts
     with app.app_context():
         latest_db_entry = HourlyReading.query.order_by(HourlyReading.timestamp_utc.desc()).first()
         if latest_db_entry:
             try:
-                last_fetched_hour_utc = pd.to_datetime(latest_db_entry.timestamp_utc).replace(minute=0, second=0, microsecond=0)
-                print(f"Data Collector: Resuming. Last known stored hour: {last_fetched_hour_utc.isoformat()}")
+                # Parse the timestamp and floor it to the hour
+                parsed_ts = pd.to_datetime(latest_db_entry.timestamp_utc).tz_convert('UTC') # Ensure UTC
+                last_fetched_hour_utc = parsed_ts.replace(minute=0, second=0, microsecond=0)
+                print(f"Data Collector: Last stored hour in DB: {last_fetched_hour_utc.isoformat()}")
             except Exception as e:
-                print(f"Data Collector: Error parsing last DB timestamp: {e}. Will start fresh.")
-                last_fetched_hour_utc = None
+                print(f"Data Collector: Error parsing last DB timestamp: {e}. Will proceed as if no prior data for this session.")
+                last_fetched_hour_utc = None # Reset if parsing fails
         else:
-            print("Data Collector: No existing data in DB. Will start fresh.")
-
+            print("Data Collector: No existing data in DB.")
+            last_fetched_hour_utc = None
 
     while True:
         current_time_utc = datetime.now(dt_timezone.utc)
-        # Target the beginning of the current hour or the next hour if we just passed it
-        target_hour_utc = current_time_utc.replace(minute=0, second=0, microsecond=0)
+        # Target the beginning of the current hour
+        target_hour_to_process_utc = current_time_utc.replace(minute=0, second=0, microsecond=0)
+        target_hour_iso = target_hour_to_process_utc.isoformat()
 
-        if last_fetched_hour_utc is None: # First run after startup or if DB was empty
-            print(f"Data Collector: First run or no previous data, targeting {target_hour_utc.isoformat()} for fetch.")
-        elif target_hour_utc <= last_fetched_hour_utc:
-            # print(f"Data Collector: Current hour {target_hour_utc.isoformat()} already processed or not yet new. Last was {last_fetched_hour_utc.isoformat()}.")
+        print(f"Data Collector: Current target hour is {target_hour_iso}")
+
+        # Check if this hour was already processed in a *very recent* previous iteration of this loop
+        # This 'last_fetched_hour_utc' primarily prevents re-processing if the script loops faster than an hour.
+        if last_fetched_hour_utc is not None and target_hour_to_process_utc <= last_fetched_hour_utc:
+            print(f"Data Collector: Hour {target_hour_iso} already processed or not yet new. Last was {last_fetched_hour_utc.isoformat()}. Sleeping.")
             time.sleep(BACKGROUND_FETCH_INTERVAL_SECONDS)
-            continue # Not a new hour yet based on our last fetch
+            continue
 
-        # If there's a gap (e.g., app was down), fetch hour by hour up to current
-        hour_to_process = last_fetched_hour_utc + timedelta(hours=1) if last_fetched_hour_utc else target_hour_utc
-        
-        processed_in_cycle = False
-        while hour_to_process <= target_hour_utc:
-            print(f"Data Collector: Processing for hour {hour_to_process.isoformat()}...")
-            with app.app_context(): # Ensure DB operations are within app context
-                # Check if data for this hour already exists
-                if HourlyReading.query.filter_by(timestamp_utc=hour_to_process.isoformat() + "Z").first():
-                    print(f"  Data for {hour_to_process.isoformat()} already in DB. Skipping Antares/Temp fetch.")
-                    last_fetched_hour_utc = hour_to_process # Mark as processed
-                    hour_to_process += timedelta(hours=1)
-                    processed_in_cycle = True
-                    continue
+        with app.app_context(): # Ensure DB operations are within app context
+            # Check if data for this specific hour ALREADY EXISTS in the database
+            existing_reading_for_target_hour = HourlyReading.query.filter_by(timestamp_utc=target_hour_iso).first()
 
-                energy_wh_value = None
-                # 1. Fetch from Antares (assuming it gives the latest reading)
+            if existing_reading_for_target_hour:
+                print(f"  Data for {target_hour_iso} already exists in DB. Checking for updates...")
+                # --- Logic to potentially update existing record (Optional) ---
+                # You might want to update if, for example, Antares provides a more accurate cumulative value later in the hour.
+                # For simplicity here, we'll assume if it exists, we might only update if a field was NULL.
+                # Or, if your 'Energy' is cumulative, you might want to fetch latest and update.
+                # This part depends heavily on your data's nature.
+
+                # Example: Update if energy was NULL or if new energy is higher (if EnergyWh is cumulative hourly max)
+                # Fetch fresh Antares data for potential update
+                new_energy_wh_value = None
                 try:
                     antares.setAccessKey(ANTARES_ACCESS_KEY)
                     latest_antares_data = antares.get(ANTARES_PROJECT_NAME, ANTARES_DEVICE_NAME)
                     if latest_antares_data and 'content' in latest_antares_data:
-                        # IMPORTANT: You need to align Antares data to the correct hour.
-                        # Antares 'latest' might not be for 'hour_to_process'.
-                        # This example assumes 'Energy' is the cumulative or hourly value you need.
-                        # A more robust solution would be to fetch Antares data for a specific time range if API supports it.
-                        # For now, we take the latest and assume it's relevant if fetched near the hour.
-                        # This part is highly dependent on how Antares structures its data and timestamps.
-                        energy_wh_value = latest_antares_data['content'].get('Energy') # Adjust key if needed
-                        if energy_wh_value is None:
-                            print(f"  Antares data for ~{hour_to_process.isoformat()} missing 'Energy' key or value.")
+                        new_energy_wh_value = latest_antares_data['content'].get('Energy')
+                except Exception as e_ant_update:
+                    print(f"  Error fetching Antares for update check on {target_hour_iso}: {e_ant_update}")
+
+                commit_update_needed = False
+                if new_energy_wh_value is not None: # Only proceed if we got new energy data
+                    try:
+                        new_energy_wh_value_float = float(new_energy_wh_value) # Attempt conversion
+                        if existing_reading_for_target_hour.EnergyWh is None or \
+                           new_energy_wh_value_float > existing_reading_for_target_hour.EnergyWh: # Example update condition
+                            print(f"  Updating Energy for {target_hour_iso}. Stored: {existing_reading_for_target_hour.EnergyWh}, New: {new_energy_wh_value_float}")
+                            existing_reading_for_target_hour.EnergyWh = new_energy_wh_value_float
+                            commit_update_needed = True
+                    except (ValueError, TypeError) as e_conv:
+                         print(f"  Antares energy value '{new_energy_wh_value}' for update check on {target_hour_iso} is not a valid number: {e_conv}")
+
+
+                # Example: Update temperature if it was NULL
+                if existing_reading_for_target_hour.TemperatureCelsius is None:
+                    print(f"  Temperature for {target_hour_iso} was NULL, attempting to fetch and update.")
+                    new_temperature_value = None
+                    try:
+                        date_str_utc = target_hour_to_process_utc.strftime('%Y-%m-%d')
+                        temp_df = data.temp_fetch(date_str_utc, date_str_utc, LATITUDE_CONFIG, LONGITUDE_CONFIG, historical=False) # Assuming historical=False gets current/forecast
+                        if temp_df is not None and 'temperature' in temp_df:
+                            temp_series = temp_df['temperature']
+                            new_temperature_value = temp_series.get(target_hour_to_process_utc) # Get temp for the specific target hour
+                            if pd.notna(new_temperature_value):
+                                existing_reading_for_target_hour.TemperatureCelsius = float(new_temperature_value)
+                                commit_update_needed = True
+                            else:
+                                print(f"  Fetched temperature for {target_hour_iso} update was NaN/None.")
+                    except Exception as e_temp_update:
+                        print(f"  Error fetching temperature for update on {target_hour_iso}: {e_temp_update}")
+
+                if commit_update_needed:
+                    try:
+                        db.session.commit()
+                        print(f"  Updated DB for {target_hour_iso}. Energy: {existing_reading_for_target_hour.EnergyWh}, Temp: {existing_reading_for_target_hour.TemperatureCelsius}")
+                    except Exception as e_db_update:
+                        db.session.rollback()
+                        print(f"  Error committing update for {target_hour_iso}: {e_db_update}")
+                else:
+                    print(f"  No updates needed for existing record {target_hour_iso}.")
+
+                last_fetched_hour_utc = target_hour_to_process_utc # Mark this hour as processed for this cycle
+                time.sleep(BACKGROUND_FETCH_INTERVAL_SECONDS)
+                continue # Move to next cycle of the main while loop
+
+            # --- If data for target_hour_iso does NOT exist, create new record ---
+            print(f"  No existing record for {target_hour_iso}. Fetching new data...")
+            energy_wh_value = None
+            # 1. Fetch from Antares
+            try:
+                antares.setAccessKey(ANTARES_ACCESS_KEY)
+                latest_antares_data = antares.get(ANTARES_PROJECT_NAME, ANTARES_DEVICE_NAME)
+                if latest_antares_data and 'content' in latest_antares_data:
+                    raw_energy = latest_antares_data['content'].get('Energy')
+                    if raw_energy is not None:
+                        try:
+                            energy_wh_value = float(raw_energy) # Convert to float immediately
+                        except (ValueError, TypeError) as e_conv:
+                            print(f"  Antares 'Energy' value '{raw_energy}' for {target_hour_iso} is not a valid number: {e_conv}")
+                            energy_wh_value = None # Ensure it's None if conversion fails
                     else:
-                        print(f"  No valid content from Antares for ~{hour_to_process.isoformat()}.")
-                except Exception as e:
-                    print(f"  Error fetching from Antares for ~{hour_to_process.isoformat()}: {e}")
+                        print(f"  Antares data for {target_hour_iso} missing 'Energy' key or value is None.")
+                else:
+                    print(f"  No valid content from Antares for {target_hour_iso}.")
+            except Exception as e_ant:
+                print(f"  Error fetching from Antares for {target_hour_iso}: {e_ant}")
 
-                if energy_wh_value is None:
-                    print(f"  Skipping DB store for {hour_to_process.isoformat()} due to missing Antares energy data.")
-                    # Decide if you want to advance last_fetched_hour_utc even if Antares fails
-                    # For now, we don't, to retry this hour later.
-                    # To prevent continuous retries on persistent Antares failure, add a retry limit or error flag.
-                    break # Break inner loop, wait for next BACKGROUND_FETCH_INTERVAL_SECONDS
+            if energy_wh_value is None: # Check after attempting conversion
+                print(f"  Skipping DB store for {target_hour_iso} due to missing or invalid Antares energy data.")
+                # Not updating last_fetched_hour_utc here, so it will be retried in the next interval
+                time.sleep(BACKGROUND_FETCH_INTERVAL_SECONDS)
+                continue
 
-                # 2. Fetch Temperature Forecast for this specific hour_to_process
-                temperature_value = None
-                try:
-                    date_str_utc = hour_to_process.strftime('%Y-%m-%d')
-                    temp_series_utc = fetch_temperature_forecast_openmeteo(date_str_utc, date_str_utc, LATITUDE_CONFIG, LONGITUDE_CONFIG)
-                    if temp_series_utc is not None:
-                        temperature_value = temp_series_utc.get(hour_to_process) # Get temp for the exact UTC hour
-                        if pd.isna(temperature_value):
-                            print(f"  Temperature for {hour_to_process.isoformat()} was NaN after fetch, trying ffill.")
-                            # Attempt to fill from earlier in the day if exact hour is missing
-                            filled_temp = temp_series_utc.reindex(pd.date_range(start=hour_to_process.replace(hour=0), end=hour_to_process, freq='h', tz='UTC'), method='ffill')
-                            if not filled_temp.empty:
-                                temperature_value = filled_temp.iloc[-1]
+            # 2. Fetch Temperature Forecast for this specific hour_to_process
+            temperature_value_float = None # Initialize as float or None
+            try:
+                date_str_utc = target_hour_to_process_utc.strftime('%Y-%m-%d')
+                # Assuming temp_fetch is robust and returns a DataFrame with a 'temperature' Series (DatetimeIndexed) or None
+                temp_df = data.temp_fetch(date_str_utc, date_str_utc, LATITUDE_CONFIG, LONGITUDE_CONFIG, historical=False)
+                if temp_df is not None and 'temperature' in temp_df:
+                    temp_series = temp_df['temperature']
+                    # Ensure target_hour_to_process_utc is timezone-aware if temp_series.index is
+                    # (already done by datetime.now(dt_timezone.utc))
+                    raw_temp = temp_series.get(target_hour_to_process_utc) # Get temp for the specific target hour
+                    if pd.notna(raw_temp): # Check if it's a valid number (not NaN)
+                        temperature_value_float = float(raw_temp)
+                    else:
+                        print(f"  Temperature for {target_hour_iso} from API was NaN/None.")
+                else:
+                    print(f"  Temperature data not available or in unexpected format from temp_fetch for {target_hour_iso}.")
+            except Exception as e_temp:
+                print(f"  Error fetching/processing temperature for {target_hour_iso}: {e_temp}")
+                # temperature_value_float remains None
 
-                except Exception as e:
-                    print(f"  Error fetching temperature for {hour_to_process.isoformat()}: {e}")
+            # 3. Store in Database
+            new_entry = HourlyReading(
+                timestamp_utc=target_hour_iso,
+                EnergyWh=energy_wh_value, # Already a float or this point wouldn't be reached
+                TemperatureCelsius=temperature_value_float # Already a float or None
+            )
+            db.session.add(new_entry)
 
-                # 3. Store in Database
-                new_entry = HourlyReading(
-                    timestamp_utc=hour_to_process.isoformat() + "Z", # ISO 8601 format
-                    EnergyWh=float(energy_wh_value),
-                    TemperatureCelsius=float(temperature_value) if pd.notna(temperature_value) else None
-                )
-                db.session.add(new_entry)
-                try:
-                    db.session.commit()
-                    print(f"  Stored: {new_entry.timestamp_utc} - Energy: {new_entry.EnergyWh:.2f}, Temp: {new_entry.TemperatureCelsius:.2f if new_entry.TemperatureCelsius else 'N/A'}")
-                    last_fetched_hour_utc = hour_to_process # Successfully stored
-                    processed_in_cycle = True
-                except Exception as e_commit:
-                    db.session.rollback()
-                    print(f"  DB Commit Error for {hour_to_process.isoformat()}: {e_commit}. Will retry this hour later.")
-                    break # Break inner loop to retry this hour after interval
+            try:
+                db.session.commit()
+                # Safe printing, assuming EnergyWh and TemperatureCelsius are now guaranteed to be float or None
+                energy_print_val = f"{new_entry.EnergyWh:.2f}" if new_entry.EnergyWh is not None else "N/A"
+                temp_print_val = f"{new_entry.TemperatureCelsius:.2f}" if new_entry.TemperatureCelsius is not None else "N/A"
+                print(f"  Stored new record: {new_entry.timestamp_utc} - Energy: {energy_print_val}, Temp: {temp_print_val}")
+                last_fetched_hour_utc = target_hour_to_process_utc # Successfully stored and processed
+            except Exception as e_db_commit:
+                db.session.rollback()
+                # Re-construct the print string carefully for the error message if new_entry might be in a weird state
+                # or simply print the raw error and basic info.
+                energy_val_on_fail = new_entry.EnergyWh if hasattr(new_entry, 'EnergyWh') else 'UNKNOWN_ENERGY'
+                temp_val_on_fail = new_entry.TemperatureCelsius if hasattr(new_entry, 'TemperatureCelsius') else 'UNKNOWN_TEMP'
 
-            hour_to_process += timedelta(hours=1) # Move to next hour if current was processed
+                print(f"  DB Commit Error for new record {target_hour_iso}: {e_db_commit}.")
+                print(f"    Attempted to store: Energy={repr(energy_val_on_fail)}, Temp={repr(temp_val_on_fail)}")
+                # Not updating last_fetched_hour_utc, so it will be retried
         
-        if not processed_in_cycle and last_fetched_hour_utc is not None : # No new hour processed, but we are past the last fetched hour
-             if target_hour_utc > last_fetched_hour_utc: # ensure we are not going backward
-                  last_fetched_hour_utc = target_hour_utc - timedelta(hours=1) # Update to avoid re-fetching same current hour immediately
-
         time.sleep(BACKGROUND_FETCH_INTERVAL_SECONDS)
 
 
@@ -389,76 +411,90 @@ def run_forecast_dms_api():
     except (ValueError, TypeError, AttributeError):
         return jsonify({"error": f"Invalid timeframe. Max is {MAX_FORECAST_HORIZON_APP}h."}), 400
 
-    # 1. Fetch necessary historical data from DB for feature creation
-    # We need at least MAX_LAG_HOURS records ending at the most recent time.
-    history_query_results = HourlyReading.query.order_by(HourlyReading.timestamp_utc.desc()).limit(MAX_LAG_HOURS + 5).all() # +5 buffer
+    # --- Fetch Historical Data ---
+    # We need:
+    # 1. History for lag feature creation (MAX_LAG_HOURS) ending at T-1 (where T is forecast start)
+    # 2. History for display (same length as hours_to_forecast) ending at T-1
+    
+    # Total historical points needed from DB: MAX_LAG_HOURS (for features) + hours_to_forecast (for display context)
+    # Ensure we get enough for the *oldest* point needed for lags of the display history.
+    # More simply: get MAX_LAG_HOURS + hours_to_forecast, all ending at the most recent data point.
+    
+    num_records_to_fetch = MAX_LAG_HOURS + hours_to_forecast + 5 # +5 buffer for safety
 
-    if len(history_query_results) < MAX_LAG_HOURS:
+    history_query_results = HourlyReading.query.order_by(HourlyReading.timestamp_utc.desc()).limit(num_records_to_fetch).all()
+
+    if len(history_query_results) < MAX_LAG_HOURS : # Need at least enough for lags for the first forecast point
         return jsonify({"error": f"Insufficient historical data in DB ({len(history_query_results)} records). "
                                  f"Need at least {MAX_LAG_HOURS} for lags."}), 400
+    
+    if len(history_query_results) < hours_to_forecast + 1 and hours_to_forecast > 0 : # +1 because one point is the T-1 for lags
+        print(f"Warning: Not enough historical data ({len(history_query_results)}) to show full {hours_to_forecast}h preceding context. "
+              f"Will show what's available.")
+
 
     # Convert query results to DataFrame, oldest first, with UTC DatetimeIndex
     history_list_for_df = []
     for r_hist in history_query_results:
         history_list_for_df.append({
             'DateTime': pd.to_datetime(r_hist.timestamp_utc, utc=True),
-            DMS_TARGET_COL_DATAFRAME: r_hist.EnergyWh, # Use 'Wh' for DataFrame
-            'temperature': r_hist.TemperatureCelsius   # Use 'temperature' for DataFrame
+            DMS_TARGET_COL_DATAFRAME: r_hist.EnergyWh,
+            'temperature': r_hist.TemperatureCelsius
         })
-    history_df_utc = pd.DataFrame(history_list_for_df).set_index('DateTime').iloc[::-1].sort_index()
+    full_history_df_utc = pd.DataFrame(history_list_for_df).set_index('DateTime').iloc[::-1].sort_index()
 
-    if history_df_utc.empty:
+    if full_history_df_utc.empty:
          return jsonify({"error": "Failed to construct historical DataFrame for prediction."}), 500
 
-    # 2. Fetch future temperature forecasts
-    last_known_history_time_utc = history_df_utc.index[-1]
+    # history_df_for_prediction_features will be the part used by algo.predict_dms
+    # It needs to end at the last actual data point to generate features for T+1
+    history_df_for_prediction_features = full_history_df_utc.copy() # Or full_history_df_utc.tail(MAX_LAG_HOURS + few)
+
+    # history_for_display will be the 'hours_to_forecast' period *before* the forecast starts
+    # It ends at the same time as history_df_for_prediction_features.index[-1]
+    history_for_display_utc = full_history_df_utc.tail(hours_to_forecast).copy() if hours_to_forecast > 0 else pd.DataFrame()
+
+
+    # --- Fetch Future Temperatures (Forecast) ---
+    last_known_history_time_utc = history_df_for_prediction_features.index[-1]
     forecast_period_start_utc = last_known_history_time_utc + timedelta(hours=1)
     forecast_period_end_utc = last_known_history_time_utc + timedelta(hours=hours_to_forecast)
-    future_temperatures_df = None # This will be a DataFrame with 'temperature' column
-
+    future_temperatures_df = None 
     try:
-        start_date_api_utc = forecast_period_start_utc.strftime('%Y-%m-%d')
-        end_date_api_utc = forecast_period_end_utc.strftime('%Y-%m-%d')
-        temp_series_fcst_utc = fetch_temperature_forecast_openmeteo(
-            start_date_api_utc, end_date_api_utc, LATITUDE_CONFIG, LONGITUDE_CONFIG
-        )
-
-        if temp_series_fcst_utc is not None and not temp_series_fcst_utc.empty:
-            # Ensure we have a continuous series for the exact forecast period hours
+        start_date_utc = forecast_period_start_utc.strftime('%Y-%m-%d')
+        end_date_utc = forecast_period_end_utc.strftime('%Y-%m-%d')
+        temp_fcst_utc = data.temp_fetch(start_date_utc, end_date_utc, LATITUDE_CONFIG, LONGITUDE_CONFIG, historical=False)
+        if temp_fcst_utc is not None and not temp_fcst_utc.empty:
             required_future_idx_utc = pd.date_range(start=forecast_period_start_utc,
                                                     end=forecast_period_end_utc,
                                                     freq='h', tz='UTC')
-            # Reindex and fill, then convert to DataFrame
-            aligned_temps = temp_series_fcst_utc.reindex(required_future_idx_utc, method='ffill').fillna(method='bfill')
+            aligned_temps = temp_fcst_utc['temperature'].reindex(required_future_idx_utc, method='ffill').fillna(method='bfill')
             future_temperatures_df = pd.DataFrame({'temperature': aligned_temps})
-
-            # Fallback for any remaining NaNs (e.g., if API didn't cover full range)
             if future_temperatures_df['temperature'].isna().any():
-                last_hist_temp = history_df_utc['temperature'].dropna().iloc[-1] if not history_df_utc['temperature'].dropna().empty else 25.0 # Default temp
+                last_hist_temp = history_df_for_prediction_features['temperature'].dropna().iloc[-1] if not history_df_for_prediction_features['temperature'].dropna().empty else 25.0
                 future_temperatures_df['temperature'] = future_temperatures_df['temperature'].fillna(last_hist_temp)
-        else:
-            print("Warning: Future temperature fetch returned no data. Using fallback.")
     except Exception as e:
         print(f"Warning: Exception during future temperature fetch: {e}. Using fallback.")
-
-    if future_temperatures_df is None or future_temperatures_df.empty: # Fallback if fetch failed
+    if future_temperatures_df is None or future_temperatures_df.empty:
         print("  Executing temperature fallback for forecast period.")
-        last_hist_temp = history_df_utc['temperature'].dropna().iloc[-1] if not history_df_utc['temperature'].dropna().empty else 25.0
+        last_hist_temp = history_df_for_prediction_features['temperature'].dropna().iloc[-1] if not history_df_for_prediction_features['temperature'].dropna().empty else 25.0
         required_future_idx_utc = pd.date_range(start=forecast_period_start_utc,
                                                 end=forecast_period_end_utc,
                                                 freq='h', tz='UTC')
         future_temperatures_df = pd.DataFrame({'temperature': last_hist_temp}, index=required_future_idx_utc)
 
-    # 3. Call the DMS prediction function from algo.py
+
+    # --- Call DMS Prediction ---
     try:
         dms_predictions_series_utc = algo.predict_dms(
-            history_df=history_df_utc, # Pass UTC history
+            history_df=history_df_for_prediction_features, # Use the history DataFrame
             max_horizon_hours=hours_to_forecast,
             features_list=DMS_FEATURES_LIST,
-            target_col=DMS_TARGET_COL_DATAFRAME, # 'Wh' for DataFrame
+            target_col=DMS_TARGET_COL_DATAFRAME,
             models_base_path=DMS_MODELS_BASE_PATH,
-            future_exog_series=future_temperatures_df # Pass UTC future temps DataFrame
+            future_exog_series=future_temperatures_df
         )
+    # ... (Error handling for prediction remains the same) ...
     except Exception as e_pred_dms:
         print(f"Error during DMS prediction call: {e_pred_dms}")
         import traceback; traceback.print_exc()
@@ -467,18 +503,29 @@ def run_forecast_dms_api():
     if dms_predictions_series_utc.empty:
         return jsonify({"error": "Forecast generation resulted in no prediction data."}), 500
 
-    # 4. Prepare response: Convert UTC prediction timestamps to APP_DISPLAY_TIMEZONE for chart labels
-    try:
-        dms_predictions_display_local = dms_predictions_series_utc.tz_convert(APP_DISPLAY_TIMEZONE)
-    except TypeError as e_tz: # Handles case where series might be tz-naive unexpectedly
-        print(f"Timezone conversion error for display: {e_tz}. Assuming UTC for display.")
-        dms_predictions_display_local = dms_predictions_series_utc # Display as is (should be UTC)
+    # --- Prepare data for the chart ---
+    # 1. Historical data for display
+    history_labels_display = []
+    history_data_display = []
+    if not history_for_display_utc.empty:
+        history_display_local = history_for_display_utc.tz_convert(APP_DISPLAY_TIMEZONE)
+        history_labels_display = [dt.strftime('%Y-%m-%d %H:%M') for dt in history_display_local.index]
+        history_data_display = [round(val, 2) if pd.notna(val) else None for val in history_display_local[DMS_TARGET_COL_DATAFRAME].values]
 
+    # 2. Forecast data for display
+    forecast_labels_display = []
+    forecast_data_display = []
+    if not dms_predictions_series_utc.empty:
+        predictions_display_local = dms_predictions_series_utc.tz_convert(APP_DISPLAY_TIMEZONE)
+        forecast_labels_display = [dt.strftime('%Y-%m-%d %H:%M') for dt in predictions_display_local.index]
+        forecast_data_display = [round(p_val, 2) if pd.notna(p_val) else None for p_val in predictions_display_local.values]
 
-    timestamps_for_chart = [dt.strftime('%Y-%m-%d %H:%M') for dt in dms_predictions_display_local.index]
-    data_for_chart = [round(p_val, 2) if pd.notna(p_val) else None for p_val in dms_predictions_display_local.values]
-
-    return jsonify({"labels": timestamps_for_chart, "data": data_for_chart})
+    return jsonify({
+        "history_labels": history_labels_display,
+        "history_data": history_data_display,
+        "forecast_labels": forecast_labels_display, # Renamed from "labels"
+        "forecast_data": forecast_data_display    # Renamed from "data"
+    })
 
 
 @app.route('/trigger_manual_retrain', methods=['POST'])

@@ -124,9 +124,9 @@
                 
                 // --- Update Chart ---
                 if (energyChart) {
-                    energyChart.data.labels = chartData.labels;
+                    energyChart.data.labels = chartData.dailyLabels;
                     if (energyChart.data.datasets && energyChart.data.datasets.length > 0) {
-                         energyChart.data.datasets[0].data = chartData.energyData; // *** USE energyData ***
+                         energyChart.data.datasets[0].data = chartData.dailyMaxValues; // *** USE energyData ***
                     }
                     energyChart.update();
                     console.log("Energy chart updated.");

@@ -48,13 +48,6 @@
 
 {% block scripts %}
 <script>
-    // JavaScript for forecast.html remains largely the same as your last version.
-    // Key things:
-    // - Ensure `fetch("{{ url_for('run_forecast_dms_api') }}", ...)` is used.
-    // - The `selectedTimeframeValue` from `data-timeframe` (e.g., "24h") is sent in the JSON body.
-    // - Chart rendering logic handles the labels and data from the API response.
-    // (Using the JS from your last forecast.html as a base)
-
     let selectedTimeframeValue = null;
     const timeframeButtons = document.querySelectorAll('.timeframe-btn');
     const runButton = document.getElementById('run-forecast');
@@ -63,57 +56,124 @@
     const ctxForecast = document.getElementById('forecastChart').getContext('2d');
     let forecastChartInstance = null;
 
-    function renderForecastChart(chartData) {
-        // ... (same renderForecastChart JS as in your previous forecast.html) ...
-        // ... ensure it handles chartData.labels and chartData.data ...
-        // ... and sets chart title appropriately ...
+    function renderForecastChart(chartResponseData) { // Renamed param for clarity
         forecastErrorMessageDiv.style.display = 'none';
-        if (!chartData || !chartData.labels || chartData.labels.length === 0) {
-            forecastErrorMessageDiv.textContent = 'No forecast data received or data is empty.';
+
+        // Check if we have forecast data to plot
+        const hasForecast = chartResponseData && chartResponseData.forecast_labels && chartResponseData.forecast_labels.length > 0;
+        const hasHistory = chartResponseData && chartResponseData.history_labels && chartResponseData.history_labels.length > 0;
+
+        if (!hasForecast && !hasHistory) {
+            forecastErrorMessageDiv.textContent = 'No forecast or historical data received to plot.';
             forecastErrorMessageDiv.style.display = 'block';
-            if (forecastChartInstance) {
+            if (forecastChartInstance) { // Clear existing chart
                 forecastChartInstance.data.labels = [];
-                forecastChartInstance.data.datasets[0].data = [];
+                forecastChartInstance.data.datasets = [];
                 forecastChartInstance.update();
             }
             return;
         }
+        
+        // Combine labels if both history and forecast exist, ensuring no overlap and sorted
+        let combinedLabels = [];
+        let historyDatasetData = [];
+        let forecastDatasetData = [];
+
+        if (hasHistory) {
+            combinedLabels = [...chartResponseData.history_labels];
+            historyDatasetData = [...chartResponseData.history_data];
+        }
+
+        if (hasForecast) {
+            // Add forecast labels, potentially adding nulls to history data for these new labels
+            chartResponseData.forecast_labels.forEach((label, index) => {
+                if (!combinedLabels.includes(label)) {
+                    combinedLabels.push(label);
+                }
+            });
+            // Sort combined labels to ensure chronological order
+            // Assuming labels are sortable strings like 'YYYY-MM-DD HH:MM'
+            combinedLabels.sort();
+
+            // Rebuild datasets based on combinedLabels
+            const tempHistoryData = new Array(combinedLabels.length).fill(null);
+            const tempForecastData = new Array(combinedLabels.length).fill(null);
+
+            if(hasHistory){
+                chartResponseData.history_labels.forEach((label, i) => {
+                    const idx = combinedLabels.indexOf(label);
+                    if (idx !== -1) tempHistoryData[idx] = chartResponseData.history_data[i];
+                });
+            }
+            chartResponseData.forecast_labels.forEach((label, i) => {
+                const idx = combinedLabels.indexOf(label);
+                if (idx !== -1) tempForecastData[idx] = chartResponseData.forecast_data[i];
+            });
+            historyDatasetData = tempHistoryData;
+            forecastDatasetData = tempForecastData;
+        } else if (hasHistory) { // Only history, no forecast
+             forecastDatasetData = new Array(combinedLabels.length).fill(null);
+        }
+
 
         if (forecastChartInstance) {
-            forecastChartInstance.data.labels = chartData.labels;
-            forecastChartInstance.data.datasets[0].data = chartData.data;
-            forecastChartInstance.options.plugins.title.text = `Forecasted Energy (${selectedTimeframeValue})`;
+            forecastChartInstance.data.labels = combinedLabels;
+            forecastChartInstance.data.datasets[0].data = historyDatasetData; // Assuming dataset 0 is history
+            forecastChartInstance.data.datasets[1].data = forecastDatasetData; // Assuming dataset 1 is forecast
+            forecastChartInstance.options.plugins.title.text = `Energy Usage: History & Forecast (${selectedTimeframeValue})`;
             forecastChartInstance.update();
         } else {
             forecastChartInstance = new Chart(ctxForecast, {
                 type: 'line',
                 data: {
-                    labels: chartData.labels,
-                    datasets: [{
-                        label: 'Forecasted Energy (Wh)',
-                        data: chartData.data,
-                        borderColor: 'rgb(75, 192, 192)',
-                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
-                        tension: 0.1,
-                        fill: true
-                    }]
+                    labels: combinedLabels,
+                    datasets: [
+                        {
+                            label: 'Historical Energy (Wh)',
+                            data: historyDatasetData,
+                            borderColor: 'rgb(54, 162, 235)', // Blue for history
+                            backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                            tension: 0.1,
+                            fill: false // Or true if you like area under history
+                        },
+                        {
+                            label: 'Forecasted Energy (Wh)',
+                            data: forecastDatasetData,
+                            borderColor: 'rgb(255, 99, 132)', // Red for forecast
+                            backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                            borderDash: [5, 5], // Dashed line for forecast
+                            tension: 0.1,
+                            fill: true
+                        }
+                    ]
                 },
                 options: {
                     scales: {
                         y: { beginAtZero: false, title: { display: true, text: 'Energy (Wh)' } },
-                        x: { title: { display: true, text: 'Time (Local)' } } // Assuming labels from API are local
+                        x: { title: { display: true, text: 'Time (Local)' } }
                     },
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        title: { display: true, text: `Forecasted Energy (${selectedTimeframeValue})` },
-                        tooltip: { callbacks: { title: function(tooltipItems) { return tooltipItems[0].label; } } }
-                    }
+                        title: { display: true, text: `Energy Usage: History & Forecast (${selectedTimeframeValue || 'N/A'})` },
+                        tooltip: {
+                            mode: 'index', // Show tooltips for all datasets at that index
+                            intersect: false,
+                            callbacks: { title: function(tooltipItems) { return tooltipItems[0].label; } }
+                        }
+                    },
+                    interaction: { // For better tooltip behavior
+                        mode: 'index',
+                        intersect: false,
+                    },
                 }
             });
         }
     }
 
+    // ... (event listeners for timeframeButtons and runButton remain the same) ...
+    // ... ensure the fetch call in runButton's listener expects the new JSON structure ...
+    // ... and calls renderForecastChart(data) where data is the full response object ...
 
     timeframeButtons.forEach(button => {
         button.addEventListener('click', () => {
@@ -141,25 +201,26 @@
             if (!response.ok) { return response.json().then(err => { throw new Error(err.error || `HTTP error ${response.status}`) }); }
             return response.json();
         })
-        .then(data => {
+        .then(data => { // data here is chartResponseData from the Python route
             if (data.error) {
                 forecastErrorMessageDiv.textContent = "Error: " + data.error;
                 forecastErrorMessageDiv.style.display = 'block';
-                renderForecastChart({ labels: [], data: [] });
+                renderForecastChart({ history_labels: [], history_data: [], forecast_labels: [], forecast_data: [] }); // Clear
             } else {
-                renderForecastChart(data);
+                renderForecastChart(data); // Pass the whole object
             }
         })
         .catch(error => {
             forecastErrorMessageDiv.textContent = 'Fetch error: ' + error.message;
             forecastErrorMessageDiv.style.display = 'block';
-            renderForecastChart({ labels: [], data: [] });
+            renderForecastChart({ history_labels: [], history_data: [], forecast_labels: [], forecast_data: [] }); // Clear
         })
         .finally(() => {
             if (selectedTimeframeValue) runButton.disabled = false;
             loadingIndicator.style.display = 'none';
         });
     });
-    renderForecastChart({ labels: [], data: [] }); // Initial empty chart
+    // Initial empty chart structure
+    renderForecastChart({ history_labels: [], history_data: [], forecast_labels: [], forecast_data: [] });
 </script>
 {% endblock %}

@@ -55,12 +55,6 @@
         {% block content %}{% endblock %}
     </main>
 
-    <footer class="footer">
-        <div class="container">
-            <span>© {{ utc_now().year }} Energy Forecasting App. Current UTC: {{ utc_now().strftime('%Y-%m-%d %H:%M:%S') }}</span>
-        </div>
-    </footer>
-
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     {% block scripts %}{% endblock %}
 </body>
