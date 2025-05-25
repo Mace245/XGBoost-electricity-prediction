@@ -1,15 +1,15 @@
 import pandas as pd
 import numpy as np
 import pickle
-import data
-import algo
+from lib import data
+from lib import algo
 
-train = False
+train = True
 TEST_SET_HOURS = 24 * 7
 
 features_list = [
 'hour', 'day_of_week', 'day_of_month', 'is_weekend',
-'lag_1', 'lag_24', 'lag_168',
+'lag_1', 'lag_24', 'lag_72', 'lag_168',
 'temperature'
 ]
 target_col = 'Wh'
@@ -85,6 +85,7 @@ def predict_dms(
         if future_exog_series is not None and not future_exog_series.empty:
             for exog_col_name in future_exog_series.columns:
                 if exog_col_name in features_for_model_h.columns: # Check if this exog var is a feature
+                    print('features', features_for_model_h)
                     try:
                         # Get the future value of the exogenous variable for the current_forecast_dt
                         future_val = future_exog_series.loc[current_forecast_dt, exog_col_name]

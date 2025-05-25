@@ -121,6 +121,7 @@ def get_all_data_from_db_for_training(db_session, energy_temp_reading_model,
 
 def handle_outliers(data, column='Wh', threshold=3):
     z_scores = zscore(data[column])
+    print('zscore', data[(np.abs(z_scores) > threshold)])
     return data[(np.abs(z_scores) < threshold)]
 
 def prepare_data(electricity_data:pd.DataFrame, temperature_data:pd.DataFrame):
@@ -129,7 +130,7 @@ def prepare_data(electricity_data:pd.DataFrame, temperature_data:pd.DataFrame):
     print(merged_data)
     
     merged_data = merged_data.ffill().dropna()
-    merged_data = handle_outliers(merged_data)
+    # merged_data = handle_outliers(merged_data)
     return merged_data
 
 def create_training_data(features:list[str], target:str):
@@ -208,7 +209,7 @@ def create_dms_feature_set_for_prediction(
     features_for_t_df = algo.create_time_features(features_for_t_df) # Creates features for index
 
     # 2. Lag features for 't' (lags of target_col from history_df_slice)
-    for lag in [1, 24, 168]: # Or get from your config
+    for lag in [1, 24, 72, 168]: # Or get from your config
         lag_col_name = f'lag_{lag}'
         # Get the value from 'target_col' at 'current_time_t - lag'
         lag_timestamp = current_time_t - pd.Timedelta(hours=lag)
@@ -238,7 +239,7 @@ def create_dms_feature_set_for_prediction(
             final_feature_row[col] = features_for_t_df[col]
     
     # Handle any NaNs (e.g., if a lag went too far back for the provided history_df_slice)
-    final_feature_row = final_feature_row.fillna(method='ffill').fillna(method='bfill').fillna(0) # Basic imputation
+    final_feature_row = final_feature_row.fillna(method='ffill').bfill().fillna(0) # Basic imputation
 
     return final_feature_row
 

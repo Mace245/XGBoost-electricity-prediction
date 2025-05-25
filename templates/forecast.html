@@ -26,6 +26,12 @@
         {% endif %}
     </div>
 
+    {% if retraining_message %}
+    <div class="alert alert-{{ retraining_category if retraining_category else 'info' }} mt-3" role="alert">
+        <strong>Retraining Status:</strong> {{ retraining_message }}
+    </div>
+    {% endif %}
+
     <p>Select forecast timeframe (Max available: {{ max_forecast_hours }} hours):</p>
     <div class="btn-group mb-3" role="group" aria-label="Forecast timeframe">
       <button type="button" class="btn btn-outline-primary timeframe-btn" data-timeframe="24h">1 Day (24h)</button>

@@ -17,7 +17,8 @@ def create_time_features(data_df):
     data_df['is_weekend'] = (data_df['day_of_week'] >= 5).astype(int)
     return data_df
 
-def create_lagged_features(data_df, target_col='Wh', lags=[1, 24, 168]):
+def create_lagged_features(data_df, target_col='Wh'):
+    lags=[1, 24, 72, 168]
     data_df = data_df.copy()
     for lag in lags:
         data_df[f'lag_{lag}'] = data_df[target_col].shift(lag)
@@ -25,7 +26,6 @@ def create_lagged_features(data_df, target_col='Wh', lags=[1, 24, 168]):
     # data_df = data_df.dropna(subset=[f'lag_{lag}' for lag in lags]) # Careful with this, might drop too much if called sequentially.
                                                                 # create_dms_training_data will handle final dropna
     return data_df
-
 
 # --- XGBoost Model Training (Keep as is) ---
 def train_xgboost_model(X_train, y_train):

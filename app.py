@@ -31,7 +31,7 @@ DMS_MODELS_BASE_PATH = 'models_dms/'
 MAX_FORECAST_HORIZON_APP = 24 * 7
 
 DMS_FEATURES_LIST = ['hour', 'day_of_week', 'day_of_month', 'is_weekend',
-                     'lag_1', 'lag_24', 'lag_168', 'temperature']
+                     'lag_1', 'lag_24', 'lag_72', 'lag_168', 'temperature']
 DMS_TARGET_COL_DATAFRAME = 'Wh'    # Name of the target column in DataFrames for algo/data modules
 DB_TARGET_COL_NAME = 'EnergyWh'    # Name of the target column in the DB Model
 DB_TEMP_COL_NAME = 'TemperatureCelsius' # Name of the temperature column in the DB Model
@@ -46,6 +46,12 @@ for f_name in DMS_FEATURES_LIST:
 RETRAIN_CHECK_INTERVAL_SECONDS = 3600 * 6 # Check for retraining eligibility every 6 hours
 RETRAIN_TRIGGER_DAY = 6 # Sunday (0=Monday, 6=Sunday)
 RETRAIN_TRIGGER_HOUR_UTC = 2 # 2 AM UTC on Sunday (time for potentially lower server load)
+
+retraining_status_message = None
+retraining_status_category = None # To store 'success' or 'error' for styling
+retraining_status_lock = threading.Lock()
+last_retrain_completed_utc = datetime.now(dt_timezone.utc) - timedelta(days=8)
+retraining_active = False
 
 # --- Initialize App, DB ---
 app = Flask(__name__)
@@ -260,12 +266,19 @@ retraining_active = False # Flag to prevent concurrent retraining
 def schedule_dms_retraining():
     """Initiates the DMS model retraining process."""
     global retraining_active, last_retrain_completed_utc
-    if retraining_active:
-        print("Retraining is already active. New trigger ignored.")
-        return
-
-    retraining_active = True
+    with retraining_status_lock:
+        if retraining_active:
+            print("Retraining is already active. New trigger ignored.")
+            return
+        retraining_active = True
     print("\n--- INITIATING DMS MODEL RETRAINING ---")
+    current_status_msg = "Retraining in progress..."
+    current_status_cat = "info"
+
+    with retraining_status_lock:
+        retraining_status_message = current_status_msg
+        retraining_status_category = current_status_cat
+    
     try:
         with app.app_context(): # Required for database access within the thread
             # 1. Fetch all data from the app's database for training
@@ -277,14 +290,17 @@ def schedule_dms_retraining():
                 model_actual_temp_attr=DB_TEMP_COL_NAME     # 'TemperatureCelsius'
             )
 
-            if training_df_utc.empty or len(training_df_utc) < (MAX_LAG_HOURS + MAX_FORECAST_HORIZON_APP + 24): # Min data
-                print(f"  Insufficient data for retraining ({len(training_df_utc)} records). "
-                      f"Need > {MAX_LAG_HOURS + MAX_FORECAST_HORIZON_APP + 24}. Retraining aborted.")
-                retraining_active = False
-                return
+            if training_df_utc.empty or len(training_df_utc) < (MAX_LAG_HOURS + MAX_FORECAST_HORIZON_APP + 24):
+                msg = (f"  Insufficient data for retraining ({len(training_df_utc)} records). "
+                       f"Need > {MAX_LAG_HOURS + MAX_FORECAST_HORIZON_APP + 24}. Retraining aborted.")
+                print(msg)
+                with retraining_status_lock:
+                    retraining_status_message = msg
+                    retraining_status_category = "warning"
+                # retraining_active will be set to False in finally
+                return # Exit from this function
 
             print(f"  Retraining DMS models with {len(training_df_utc)} data points.")
-            # 2. Call the main training function from algo.py
             algo.train_all_dms_horizon_models(
                 base_data_for_dms_training=training_df_utc,
                 max_forecast_horizon_hours=MAX_FORECAST_HORIZON_APP,
@@ -293,28 +309,41 @@ def schedule_dms_retraining():
                 models_save_path=DMS_MODELS_BASE_PATH
             )
             last_retrain_completed_utc = datetime.now(dt_timezone.utc)
-            print(f"--- DMS MODEL RETRAINING COMPLETED: {last_retrain_completed_utc.isoformat()} ---")
-            flash("DMS models have been successfully retrained.", "success") # Won't show unless a request context is active
+            success_msg = f"DMS models successfully retrained at {last_retrain_completed_utc.isoformat()}."
+            print(f"--- {success_msg} ---")
+            with retraining_status_lock:
+                retraining_status_message = success_msg
+                retraining_status_category = "success"
 
     except Exception as e:
+        error_msg = f"Error during model retraining: {e}"
         print(f"--- FATAL ERROR DURING DMS RETRAINING: {e} ---")
         import traceback; traceback.print_exc()
-        flash(f"Error during model retraining: {e}", "error")
+        with retraining_status_lock:
+            retraining_status_message = error_msg
+            retraining_status_category = "danger" # Use 'danger' for Bootstrap alert styling
     finally:
-        retraining_active = False
+        with retraining_status_lock: # Ensure retraining_active is always reset
+            retraining_active = False
+        print("--- Retraining attempt finished. retraining_active set to False. ---")
 
 def background_retraining_scheduler():
     """Checks periodically if it's time to retrain models."""
     print("Background Retraining Scheduler started...")
-    global last_retrain_completed_utc
+    global last_retrain_completed_utc # This global is fine for the scheduler itself
     while True:
         now_utc = datetime.now(dt_timezone.utc)
         if (now_utc.weekday() == RETRAIN_TRIGGER_DAY and
             now_utc.hour == RETRAIN_TRIGGER_HOUR_UTC and
-            (now_utc - last_retrain_completed_utc).days >= 7): # Check if at least 7 days passed
+            (now_utc - last_retrain_completed_utc).days >= 7):
             print(f"Retraining condition met (Day: {now_utc.weekday()}, Hour: {now_utc.hour} UTC). Last: {last_retrain_completed_utc.date()}")
-            schedule_dms_retraining() # This will run in the current thread.
-                                     # For long retraining, consider starting a new thread for schedule_dms_retraining itself.
+            
+            # Run schedule_dms_retraining in its own thread so this scheduler doesn't block
+            retrain_job_thread = threading.Thread(target=schedule_dms_retraining)
+            retrain_job_thread.start() 
+            # Note: If schedule_dms_retraining is triggered, it will set retraining_active.
+            # The scheduler will continue to run, but new retraining jobs won't start if one is active.
+            # last_retrain_completed_utc is updated *inside* schedule_dms_retraining upon success.
         time.sleep(RETRAIN_CHECK_INTERVAL_SECONDS)
 
 
@@ -395,9 +424,22 @@ def forecast_view():
             "EnergyWh": f"{latest_reading_db.EnergyWh:.2f}" if latest_reading_db.EnergyWh is not None else "N/A",
             "TemperatureCelsius": f"{latest_reading_db.TemperatureCelsius:.2f}" if latest_reading_db.TemperatureCelsius is not None else "N/A"
         }
+
+    current_retraining_msg = None
+    current_retraining_cat = None
+    with retraining_status_lock: # Safely read the status
+        if retraining_status_message:
+            current_retraining_msg = retraining_status_message
+            current_retraining_cat = retraining_status_category
+            # Optional: Clear the message after displaying it once, or let it persist until next status change
+            # retraining_status_message = None 
+            # retraining_status_category = None
+
     return render_template('forecast.html',
-                           latest_reading=latest_reading_display,
-                           max_forecast_hours=MAX_FORECAST_HORIZON_APP)
+                           latest_reading=latest_reading_display, # Use new variable name
+                           max_forecast_hours=MAX_FORECAST_HORIZON_APP,
+                           retraining_message=current_retraining_msg,
+                           retraining_category=current_retraining_cat)
 
 
 @app.route('/run_forecast_dms', methods=['POST'])
@@ -468,7 +510,7 @@ def run_forecast_dms_api():
             required_future_idx_utc = pd.date_range(start=forecast_period_start_utc,
                                                     end=forecast_period_end_utc,
                                                     freq='h', tz='UTC')
-            aligned_temps = temp_fcst_utc['temperature'].reindex(required_future_idx_utc, method='ffill').fillna(method='bfill')
+            aligned_temps = temp_fcst_utc['temperature'].reindex(required_future_idx_utc, method='ffill').ffill()
             future_temperatures_df = pd.DataFrame({'temperature': aligned_temps})
             if future_temperatures_df['temperature'].isna().any():
                 last_hist_temp = history_df_for_prediction_features['temperature'].dropna().iloc[-1] if not history_df_for_prediction_features['temperature'].dropna().empty else 25.0
@@ -530,15 +572,21 @@ def run_forecast_dms_api():
 
 @app.route('/trigger_manual_retrain', methods=['POST'])
 def trigger_manual_retrain_route():
-    global retraining_active # Ensure global flag is used
-    if retraining_active:
-        flash('Retraining is already in progress. Please wait.', 'warning')
-    else:
-        flash('Manual model retraining has been triggered. This may take several minutes. Check server logs for progress and completion.', 'info')
-        # Run retraining in a new thread to avoid blocking the web request
-        retrain_thread = threading.Thread(target=schedule_dms_retraining)
-        retrain_thread.start()
-    return redirect(url_for('forecast_view'))
+    global retraining_active, retraining_status_message, retraining_status_category # Access globals
+    
+    with retraining_status_lock: # Use lock for checking/setting retraining_active
+        if retraining_active:
+            flash('Retraining is already in progress. Please wait.', 'warning')
+        else:
+            # Set a message immediately so user sees feedback before thread starts
+            retraining_status_message = "Manual retraining triggered. Check server logs for progress. Status will update here."
+            retraining_status_category = "info"
+            flash('Manual retraining triggered. Status will update on this page shortly.', 'info')
+            
+            # Run retraining in a new thread
+            manual_retrain_thread = threading.Thread(target=schedule_dms_retraining)
+            manual_retrain_thread.start()
+    return redirect(url_for('forecast_view')) # Redirect immediately
 
 
 @app.route('/model_performance')
