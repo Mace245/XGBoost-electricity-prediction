@@ -297,8 +297,7 @@ def schedule_dms_retraining():
                 with retraining_status_lock:
                     retraining_status_message = msg
                     retraining_status_category = "warning"
-                # retraining_active will be set to False in finally
-                return # Exit from this function
+                return 
 
             print(f"  Retraining DMS models with {len(training_df_utc)} data points.")
             algo.train_all_dms_horizon_models(
@@ -431,9 +430,6 @@ def forecast_view():
         if retraining_status_message:
             current_retraining_msg = retraining_status_message
             current_retraining_cat = retraining_status_category
-            # Optional: Clear the message after displaying it once, or let it persist until next status change
-            # retraining_status_message = None 
-            # retraining_status_category = None
 
     return render_template('forecast.html',
                            latest_reading=latest_reading_display, # Use new variable name
