@@ -65,8 +65,8 @@ def fetch_elec_temp():
     electricity_data = electricity_data.tz_localize('Asia/Kuala_Lumpur')
     print(start_date, end_date)
 
-    latitude = 14.5833
-    longitude = 121
+    latitude = 3.1219145808473048
+    longitude = 101.65699508075299
 
     temperature_data = temp_fetch(
         start_date=start_date,
@@ -281,7 +281,7 @@ def visualize(model, features:list[str], actual_values:pd.Series, forecast_value
     print(f"Root Mean Squared Error (RMSE): {rmse}")
 
     # Visualize
-    plt.figure(figsize=(12, 6))
+    plt.figure(figsize=(6, 3))
     plt.plot(actuals_aligned.index, actuals_aligned, label='Actual')
     plt.plot(forecast_aligned.index, forecast_aligned, label='Forecast', linestyle='--')
     plt.title(f"{period_label} Comparison (RMSE: {rmse:.2f})")
@@ -289,26 +289,6 @@ def visualize(model, features:list[str], actual_values:pd.Series, forecast_value
     plt.ylabel("Wh")
     plt.legend()
     plt.show()
-
-    # Feature importance (optional, can be kept or removed if desired)
-    if model and hasattr(model, 'feature_importances_'):
-        try:
-            importance = model.feature_importances_
-            print("\nFeature Importance:")
-            # Create a Series for easier sorting and display
-            feat_imp = pd.Series(importance, index=features).sort_values(ascending=False)
-            print(feat_imp)
-
-            # Plotting feature importance
-            plt.figure(figsize=(10, 6))
-            feat_imp.plot(kind='bar')
-            plt.ylabel("Importance Score")
-            plt.title("Feature Importance")
-            plt.xticks(rotation=45, ha='right')
-            plt.tight_layout()
-            plt.show()
-        except Exception as e:
-            print(f"Could not plot feature importance: {e}")
 
 def visualize_dms_forecast(
     dms_forecast_series: pd.Series,   
@@ -318,19 +298,6 @@ def visualize_dms_forecast(
     models_for_importance: dict = None,
 ):
     comparison_df = pd.DataFrame({'Actual': actual_values_series, 'Forecast': dms_forecast_series}).dropna()
-
-    if comparison_df.empty:
-        print(f"Warning: No overlapping data between actuals and DMS forecast for period '{period_label}'. Cannot calculate metrics.")
-        if not dms_forecast_series.empty:
-            plt.figure(figsize=(15, 7))
-            plt.plot(dms_forecast_series.index, dms_forecast_series, label='DMS Forecast Only', linestyle='--')
-            plt.title(f"{period_label} (No Actuals for Comparison)")
-            plt.xlabel("DateTime")
-            plt.ylabel("Wh") # Or your target variable name
-            plt.legend()
-            plt.tight_layout()
-            plt.show()
-        return
 
     actuals_aligned = comparison_df['Actual']
     forecast_aligned = comparison_df['Forecast']
@@ -350,7 +317,7 @@ def visualize_dms_forecast(
 
 
     # Visualize Forecast vs Actual
-    plt.figure(figsize=(15, 7))
+    plt.figure(figsize=(6, 3))
     plt.plot(actuals_aligned.index, actuals_aligned, label='Actual Values', marker='.', linestyle='-')
     plt.plot(forecast_aligned.index, forecast_aligned, label='DMS Forecast', marker='.', linestyle='--')
     plt.title(f"{period_label} Comparison\nRMSE: {rmse:.2f} | MAE: {mae:.2f} | MAPE: {mape:.2f}%")
@@ -360,37 +327,3 @@ def visualize_dms_forecast(
     plt.grid(True, which='both', linestyle='--', linewidth=0.5)
     plt.tight_layout()
     plt.show()
-
-    # Feature importance
-    if models_for_importance and isinstance(models_for_importance, dict):
-        # Check if features_list is available
-        if features_list and not hasattr(visualize_dms_forecast, 'features_list_param'):
-             print("Warning: 'features_list' not found globally or passed as param. Cannot display feature importance.")
-             return # Or pass features_list as an argument to visualize_dms_forecast
-
-        current_features_list = features_list # Or use the passed parameter
-
-        if not current_features_list:
-            print("Warning: 'features_list' is empty. Cannot display feature importance.")
-            return
-
-        print("\n--- Feature Importance for Specified DMS Horizon Models ---")
-        for horizon_h, model_h in models_for_importance.items():
-            if model_h and hasattr(model_h, 'feature_importances_'):
-                try:
-                    importance = model_h.feature_importances_
-                    feat_imp = pd.Series(importance, index=current_features_list).sort_values(ascending=False)
-
-                    plt.figure(figsize=(10, 6))
-                    feat_imp.plot(kind='bar')
-                    plt.title(f"Feature Importance for DMS Model (Horizon h={horizon_h})")
-                    plt.ylabel("Importance Score")
-                    plt.xticks(rotation=45, ha='right')
-                    plt.tight_layout()
-                    plt.show()
-                    print(f"\nTop Features for h={horizon_h}:")
-                    print(feat_imp.head())
-                except Exception as e:
-                    print(f"Could not plot/display feature importance for h={horizon_h}: {e}")
-            else:
-                print(f"Model for h={horizon_h} not provided or has no 'feature_importances_' attribute.")
