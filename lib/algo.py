@@ -30,9 +30,9 @@ def create_lagged_features(data_df, target_col='Wh'):
 # --- XGBoost Model Training (Keep as is) ---
 def train_xgboost_model(X_train, y_train):
     model = xgb.XGBRegressor(
-        max_depth=6, learning_rate=0.069, n_estimators=1000,
-        colsample_bytree=0.7, subsample=0.8, reg_alpha=0.1, reg_lambda=0.1,
-        n_jobs=-1, early_stopping_rounds=50, eval_metric='rmse',
+        max_depth=5, learning_rate=0.3, n_estimators=1000,
+        colsample_bytree=1, subsample=1, reg_alpha=0, reg_lambda=1,
+        n_jobs=None, early_stopping_rounds=50, eval_metric='rmse',
     )
     tss = TimeSeriesSplit(n_splits=3)
     scores = []

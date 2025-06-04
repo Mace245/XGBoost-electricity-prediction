@@ -85,7 +85,6 @@ def predict_dms(
         if future_exog_series is not None and not future_exog_series.empty:
             for exog_col_name in future_exog_series.columns:
                 if exog_col_name in features_for_model_h.columns: # Check if this exog var is a feature
-                    print('features', features_for_model_h)
                     try:
                         # Get the future value of the exogenous variable for the current_forecast_dt
                         future_val = future_exog_series.loc[current_forecast_dt, exog_col_name]
@@ -222,7 +221,6 @@ if __name__ == "__main__":
     if not dms_test_predictions.empty and not test_actuals_series.empty:
         print(f"\n--- Evaluating Forecast for Test Period (First 5 predictions vs actuals) ---")
         comparison_df_head = pd.DataFrame({'Actual': test_actuals_series, 'Forecast': dms_test_predictions}).dropna().head()
-        print(comparison_df_head)
 
         models_to_inspect_for_viz = {}
         horizons_to_load_for_viz = [1, TEST_SET_HOURS // 2 if TEST_SET_HOURS > 1 else 1, TEST_SET_HOURS]
