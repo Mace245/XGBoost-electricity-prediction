@@ -27,19 +27,16 @@ def create_lagged_features(data_df, target_col='Wh'):
                                                                 # create_dms_training_data will handle final dropna
     return data_df
 
-# --- XGBoost Model Training (Keep as is) ---
 def train_xgboost_model(X_train, y_train):
     model = xgb.XGBRegressor(
-        max_depth=5, learning_rate=0.3, n_estimators=1000,
-        colsample_bytree=1, subsample=1, reg_alpha=0, reg_lambda=1,
-        n_jobs=None, early_stopping_rounds=50, eval_metric='rmse',
+        max_depth=3, learning_rate=0.09, n_estimators=230,
+        colsample_bytree=0.84, subsample=0.81, reg_alpha=0, reg_lambda=0.19, min_child_weight=3,
+        n_jobs=None, early_stopping_rounds=50, eval_metric='rmse', 
+        # tree_method= 'gpu_hist', device='cuda:0'
     )
     tss = TimeSeriesSplit(n_splits=3)
     scores = []
     # print(f"    Inside train_xgboost_model. X_train shape: {X_train.shape}, y_train shape: {y_train.shape}")
-    if X_train.empty or y_train.empty:
-        print("    Cannot train XGBoost model with empty X_train or y_train.")
-        return None # Or raise error
 
     for train_idx, val_idx in tss.split(X_train):
         X_train_fold, X_val_fold = X_train.iloc[train_idx], X_train.iloc[val_idx]
@@ -75,11 +72,6 @@ def train_all_dms_horizon_models(
             target_col=target_col,
             horizon=h
         )
-
-        if training_data_for_h.X.empty or training_data_for_h.y.empty:
-            print(f"    Skipping horizon h={h} due to insufficient data after processing.")
-            # ... (optional debug prints from your train2.py if needed) ...
-            continue
 
         print(f"    Training XGBoost model with {len(training_data_for_h.X)} samples for h={h}...")
         model_for_h = train_xgboost_model( # This is the local train_xgboost_model
