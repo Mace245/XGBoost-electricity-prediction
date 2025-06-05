@@ -240,8 +240,6 @@ if __name__ == "__main__":
             dms_forecast_series=dms_test_predictions,
             actual_values_series=test_actuals_series,
             period_label=f"DMS {TEST_SET_HOURS}-Hour Test Set Evaluation",
-            models_for_importance=models_to_inspect_for_viz if models_to_inspect_for_viz else None,
-            features_list=features_list
         )
     else:
         print("Could not generate predictions or actuals for evaluation.")

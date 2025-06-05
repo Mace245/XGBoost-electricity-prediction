@@ -294,8 +294,6 @@ def visualize_dms_forecast(
     dms_forecast_series: pd.Series,   
     actual_values_series: pd.Series, 
     period_label: str,
-    features_list: list[str],
-    models_for_importance: dict = None,
 ):
     comparison_df = pd.DataFrame({'Actual': actual_values_series, 'Forecast': dms_forecast_series}).dropna()
 
