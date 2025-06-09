@@ -32,7 +32,6 @@
     </div>
     {% endif %}
 
-    <p>Select forecast timeframe (Max available: {{ max_forecast_hours }} hours):</p>
     <div class="btn-group mb-3" role="group" aria-label="Forecast timeframe">
       <button type="button" class="btn btn-outline-primary timeframe-btn" data-timeframe="24h">1 Day (24h)</button>
       <button type="button" class="btn btn-outline-primary timeframe-btn" data-timeframe="72h">3 Days (72h)</button>
@@ -140,7 +139,8 @@
                             borderColor: 'rgb(54, 162, 235)', // Blue for history
                             backgroundColor: 'rgba(54, 162, 235, 0.1)',
                             tension: 0.1,
-                            fill: false // Or true if you like area under history
+                            pointRadius: 0, 
+                            pointHoverRadius: 5 
                         },
                         {
                             label: 'Forecasted Energy (Wh)',
@@ -149,7 +149,9 @@
                             backgroundColor: 'rgba(255, 99, 132, 0.2)',
                             borderDash: [5, 5], // Dashed line for forecast
                             tension: 0.1,
-                            fill: true
+                            fill: false,
+                            pointRadius: 0, 
+                            pointHoverRadius: 5 
                         }
                     ]
                 },

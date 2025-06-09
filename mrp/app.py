@@ -175,6 +175,17 @@ def get_range_data():
         print(f"Error generating graph for range{e}")
         return "Error generating graph data.", 500
     
+@app.route('/genergy_monthly')
+def monthly_summary():
+    all_readings = dbReading.query.order_by(dbReading.DateTime.asc()).all()
+    data_for_js = [
+        {
+            "DateTime": r.DateTime,
+            "Power": r.Power
+        } for r in all_readings
+    ]
+    return render_template('genergy_monthly.html', readings=data_for_js)
+    
 @app.route('/genergy_daily')
 def database_genergy_daily():
     # No need to pass readings here if the graph loads dynamically via JS

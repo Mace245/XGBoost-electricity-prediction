@@ -139,8 +139,13 @@
                             responsive: true, maintainAspectRatio: false,
                             interaction: { mode: 'index', intersect: false },
                             scales: {
-                                x: { title: { display: true, text: 'DateTime (UTC)' } },
-                                y: { title: { display: true, text: 'Energy (Wh)' }, beginAtZero: true } // *** Y-AXIS LABEL ***
+                                x: { title: { display: true, text: 'Waktu (UTC)' } },
+                                y: { title: { display: true, text: 'Energi (Wh)' }, beginAtZero: true } // *** Y-AXIS LABEL ***
+                            },
+                            plugins: {
+                                legend: {
+                                    display: false
+                                }
                             }
                         }
                     });

@@ -10,35 +10,35 @@
     <style>
         .chart-container {
             position: relative;
-            height: 90vh;
+            height: 80vh; /* Adjusted height */
             width: 95%;
             margin-top: 20px;
         }
-        .controls { margin-bottom: 20px; }
-        .table-responsive {overflow-y: auto; margin-top: 30px; }
+        .controls { margin-bottom: 10px; }
+        #totalEnergyStat { font-weight: 500; }
     </style>
 </head>
 <body>
-    <div class="container"> 
-        <!-- Date Range Selection Controls -->
-        <div class="row justify-content-center controls gy-2 gx-3 align-items-center">
-            <!-- Start Date Group -->
-            <div class="col-auto d-flex align-items-center"> 
-                <label for="startDate" class="form-label me-2 mb-0">Start:</label>
-                <input type="date" class="form-control" id="startDate"> 
-            </div>
+    <div class="container">
+        <!-- Month Selection Controls -->
+        <div class="row justify-content-center controls gy-2 gx-3 align-items-center mt-3">
             <div class="col-auto d-flex align-items-center">
-                <label for="endDate" class="form-label me-2 mb-0">End:</label>
-                <input type="date" class="form-control" id="endDate">
+                <label for="monthPicker" class="form-label me-2 mb-0">Pilih Bulan:</label>
+                <input type="month" class="form-control" id="monthPicker">
             </div>
             <div class="col-auto align-self-end">
-                <button id="updateButton" class="btn btn-primary">Update Chart</button>
+                <button id="updateButton" class="btn btn-primary">Update</button>
             </div>
         </div>
-         <div id="errorMessage" class="alert alert-danger mt-2" style="display: none;" role="alert"></div>
+
+        <!-- Total Energy Statistic Display -->
+        <div id="totalEnergyStat" class="text-center fs-4 mt-3 mb-2" role="status" aria-live="polite"></div>
+
+        <!-- Error Message Display -->
+        <div id="errorMessage" class="alert alert-danger" style="display: none;" role="alert"></div>
 
         <!-- Energy Chart Display -->
-        <div class="chart-container">
+        <div class="chart-container mx-auto">
             <canvas id="energyChart"></canvas> <!-- Canvas for Energy -->
         </div>
     </div> <!-- /container -->
@@ -48,142 +48,111 @@
     <script>
         // --- DOM Elements ---
         const ctxEnergy = document.getElementById('energyChart').getContext('2d');
-        const startDateInput = document.getElementById('startDate');
-        const endDateInput = document.getElementById('endDate');
+        const monthPicker = document.getElementById('monthPicker');
         const updateButton = document.getElementById('updateButton');
         const errorMessageDiv = document.getElementById('errorMessage');
+        const totalEnergyStat = document.getElementById('totalEnergyStat');
 
         let energyChart; // Holds the chart instance
 
         // --- Helper Functions ---
-        function formatDate(date) {
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            return `${year}-${month}-${day}`;
-        }
         function showError(message) { errorMessageDiv.textContent = message; errorMessageDiv.style.display = 'block'; }
         function hideError() { errorMessageDiv.style.display = 'none'; errorMessageDiv.textContent = ''; }
 
-        // --- Fetch Data and Update Chart ---
-        async function updateChartWithRange(startDate, endDate) {
+        // --- Fetch Data and Update UI ---
+        async function fetchAndDisplayData(monthString) {
             hideError();
+            totalEnergyStat.textContent = ''; // Clear previous stat
+
+            const year = parseInt(monthString.substring(0, 4));
+            const month = parseInt(monthString.substring(5, 7));
+            const startDate = `${monthString}-01`;
+            const lastDayOfMonth = new Date(year, month, 0).getDate();
+            const endDate = `${monthString}-${String(lastDayOfMonth).padStart(2, '0')}`;
+
             const url = `/get_range_data?start_date=${startDate}&end_date=${endDate}`;
-            console.log("Fetching energy data from:", url);
+            console.log("Fetching data for month from:", url);
 
             try {
                 const response = await fetch(url);
                 const responseData = await response.json();
                 if (!response.ok) throw new Error(responseData.error || `HTTP error! Status: ${response.status}`);
 
-                const chartData = responseData; // Contains labels, energyData, powerData
+                // Assumes responseData has { labels, energyData, powerData }
+                const { labels, energyData, powerData } = responseData;
 
-                // --- Process Data: Find Max Energy Per Day ---
-                const dailyMaxEnergy = {}; // Object to store max energy per date: { 'YYYY-MM-DD': maxEnergy }
+                // --- 1. Process for Chart: Find Max Energy Reading Per Day ---
+                const dailyMaxEnergy = {}; // { 'YYYY-MM-DD': maxEnergy }
+                for (let i = 0; i < labels.length; i++) {
+                    const timestamp = labels[i];
+                    const energy = energyData[i];
 
-                for (let i = 0; i < responseData.labels.length; i++) {
-                    const timestamp = responseData.labels[i];
-                    const energy = responseData.energyData[i];
-
-                    // Basic validation for timestamp format and energy value
                     if (typeof timestamp !== 'string' || timestamp.length < 10 || typeof energy !== 'number') {
-                        console.warn(`Skipping invalid data point at index ${i}:`, { timestamp, energy });
-                        continue; // Skip malformed data
+                        console.warn(`Skipping invalid energy data point:`, { timestamp, energy });
+                        continue;
                     }
-
-                    const datePart = timestamp.substring(0, 10); // Extract "YYYY-MM-DD"
-
-                    // Check if this date exists and if the current energy is higher, or if it's the first entry for this date
-                    if (!dailyMaxEnergy.hasOwnProperty(datePart) || energy > dailyMaxEnergy[datePart]) {
+                    const datePart = timestamp.substring(0, 10);
+                    if (!dailyMaxEnergy[datePart] || energy > dailyMaxEnergy[datePart]) {
                         dailyMaxEnergy[datePart] = energy;
                     }
                 }
-                console.log("Processed daily maximums:", dailyMaxEnergy);
 
+                const sortedDates = Object.keys(dailyMaxEnergy).sort();
+                const chartLabels = sortedDates;
+                const chartValues = sortedDates.map(date => dailyMaxEnergy[date]);
 
-                // --- Prepare Data for Chart.js (Sorted) ---
-                // 1. Get date keys and sort them
-                const sortedDates = Object.keys(dailyMaxEnergy).sort(); // Sort dates chronologically
-
-                // 2. Create arrays for labels and data based on the sorted dates
-                const dailyLabels = sortedDates;
-                const dailyMaxValues = sortedDates.map(date => dailyMaxEnergy[date]);
-
-                if (dailyLabels.length === 0) {
-                    console.warn("No valid daily data found to display.");
-                    // Optionally clear the chart or show a message
-                    if (energyChart) {
+                if (chartLabels.length === 0) {
+                     if (energyChart) {
                         energyChart.data.labels = [];
                         energyChart.data.datasets[0].data = [];
                         energyChart.update();
                     }
-                    showError("No data available for the selected range after processing."); // Assuming showError exists
-                    return; // Stop further processing
+                    showError("No data available for the selected month.");
+                    return;
                 }
 
-                
-                // --- Update Chart ---
+                // --- 3. Update Chart ---
                 if (energyChart) {
-                    energyChart.data.labels = chartData.dailyLabels;
-                    if (energyChart.data.datasets && energyChart.data.datasets.length > 0) {
-                         energyChart.data.datasets[0].data = chartData.dailyMaxValues; // *** USE energyData ***
-                    }
+                    energyChart.data.labels = chartLabels;
+                    energyChart.data.datasets[0].data = chartValues;
+                    energyChart.options.scales.x.title.text = `Date in ${monthString}`;
                     energyChart.update();
-                    console.log("Energy chart updated.");
+                    console.log("Energy chart updated for", monthString);
                 } else {
                     energyChart = new Chart(ctxEnergy, {
                         type: 'line',
                         data: {
-                            labels: dailyLabels,
+                            labels: chartLabels,
                             datasets: [{
-                                label: 'Daily Energy (Wh)', // *** CHART LABEL ***
-                                data: dailyMaxValues,   // *** USE energyData ***
-                                borderColor: 'rgb(255, 99, 132)', // Different color
+                                label: '',
+                                data: chartValues,
+                                borderColor: 'rgb(255, 99, 132)',
                                 backgroundColor: 'rgba(255, 99, 132, 0.2)',
                                 tension: 0.1,
                                 fill: false,
-                                spanGaps: true
                             }]
                         },
                         options: {
                             responsive: true, maintainAspectRatio: false,
                             interaction: { mode: 'index', intersect: false },
                             scales: {
-                                x: { title: { display: true, text: 'DateTime (UTC)' } },
-                                y: { title: { display: true, text: 'Energy (Wh)' }, beginAtZero: true } // *** Y-AXIS LABEL ***
+                                x: { title: { display: false, text: `Date in ${monthString}` } },
+                                y: { title: { display: true, text: 'Energi (Wh)' }, beginAtZero: true }
                             },
-                            animation: {
-                                duration: 500, // Optional: small animation duration
-                                onComplete: function() {
-                                    const chartInstance = this; // 'this' is the chart instance in v4
-                                    const ctx = chartInstance.ctx;
-                                    ctx.font = '10px Arial'; // Adjust font as needed
-                                    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)'; // Adjust color as needed
-                                    ctx.textAlign = 'center';
-                                    ctx.textBaseline = 'bottom';
-
-                                    chartInstance.data.datasets.forEach(function(dataset, i) {
-                                        const meta = chartInstance.getDatasetMeta(i); // Get metadata
-                                        if (!meta.hidden) { // Check if dataset is visible
-                                            meta.data.forEach(function(element, index) { // element is the point on the chart
-                                                const dataValue = dataset.data[index];
-                                                const displayValue = typeof dataValue === 'number' ? dataValue.toFixed(3) : dataValue; // Format value (e.g., 1 decimal)
-
-                                                // Use element.x and element.y for position in v4
-                                                ctx.fillText(displayValue, element.x, element.y - 5); // Draw 5px above the point
-                                            });
-                                        }
-                                    });
-                                } // End of onComplete
-                            } // End of animation
+                             plugins: {
+                                title: { display: false, text: 'Daily Maximum Energy Reading' },
+                                legend: {
+                                    display: false
+                                }
+                            }
                         }
                     });
-                    console.log("Energy chart created.");
+                    console.log("Energy chart created for", monthString);
                 }
 
             } catch (error) {
-                console.error('Error fetching/updating energy chart:', error);
-                showError(`Failed to load energy chart data: ${error.message}`);
+                console.error('Error fetching/updating energy data:', error);
+                showError(`Failed to load data: ${error.message}`);
                  if (energyChart) { // Clear chart on error
                      energyChart.data.labels = [];
                      energyChart.data.datasets[0].data = [];
@@ -194,35 +163,29 @@
 
         // --- Event Listeners ---
         updateButton.addEventListener('click', () => {
-            const start = startDateInput.value;
-            const end = endDateInput.value;
-            if (!start || !end) { showError('Please select both dates.'); return; }
-            if (new Date(start) > new Date(end)) { showError('Start date cannot be after end date.'); return; }
-            updateChartWithRange(start, end);
+            const month = monthPicker.value;
+            if (!month) {
+                showError('Please select a month.');
+                return;
+            }
+            fetchAndDisplayData(month);
         });
 
         // --- Initial Load ---
         document.addEventListener('DOMContentLoaded', () => {
             const today = new Date();
-            const todayFormatted = formatDate(today);
-            const minDateAllowed = "2025-04-01";
+            const minDateAllowed = "2025-04"; // Format: YYYY-MM
 
+            const currentYear = today.getFullYear();
+            const currentMonth = String(today.getMonth() + 1).padStart(2, '0');
+            const maxMonthAllowed = `${currentYear}-${currentMonth}`;
 
-            startDateInput.min = minDateAllowed;
-            startDateInput.max = todayFormatted;
-            endDateInput.min = minDateAllowed;
-            endDateInput.max = todayFormatted;
+            monthPicker.min = minDateAllowed;
+            monthPicker.max = maxMonthAllowed;
 
-            const defaultStartDate = minDateAllowed;
-            const defaultEndDate = todayFormatted;
-
-            // Ensure default dates respect the new min/max limits
-            startDateInput.value = (new Date(defaultStartDate) >= new Date(minDateAllowed)) ? defaultStartDate : minDateAllowed;
-            endDateInput.value = defaultEndDate;
-
-            startDateInput.value = defaultStartDate;
-            endDateInput.value = defaultEndDate;
-            updateChartWithRange(defaultStartDate, defaultEndDate); // Initial load
+            // Set default value and trigger initial load
+            monthPicker.value = maxMonthAllowed;
+            fetchAndDisplayData(maxMonthAllowed);
         });
     </script>
 </body>

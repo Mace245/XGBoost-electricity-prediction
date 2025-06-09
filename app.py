@@ -370,46 +370,6 @@ def database_log_view():
         })
     return render_template('database_log.html', readings=readings_display, pagination=pagination, APP_DISPLAY_TIMEZONE=APP_DISPLAY_TIMEZONE)
 
-@app.route('/fetch_graph_data_db_log') # New specific endpoint for this graph
-def fetch_graph_data_db_log_api():
-    start_date_str = request.args.get('start_date') # Expected YYYY-MM-DD
-    end_date_str = request.args.get('end_date')     # Expected YYYY-MM-DD
-
-    if not (start_date_str and end_date_str):
-        return jsonify({"error": "Start and end dates are required."}), 400
-    try:
-        # Assume input dates are 'local' to the app's display, convert to UTC for query
-        start_dt_local = pd.to_datetime(start_date_str).replace(hour=0, minute=0, second=0)
-        end_dt_local = pd.to_datetime(end_date_str).replace(hour=23, minute=59, second=59)
-
-        start_dt_utc = start_dt_local.tz_localize(APP_DISPLAY_TIMEZONE, ambiguous='infer').tz_convert('UTC')
-        end_dt_utc = end_dt_local.tz_localize(APP_DISPLAY_TIMEZONE, ambiguous='infer').tz_convert('UTC')
-
-        query_start_utc_iso = start_dt_utc.isoformat().replace('+00:00', 'Z')
-        query_end_utc_iso = end_dt_utc.isoformat().replace('+00:00', 'Z')
-
-    except Exception as e:
-        return jsonify({"error": f"Invalid date format: {e}"}), 400
-
-    readings = HourlyReading.query.filter(
-        HourlyReading.timestamp_utc >= query_start_utc_iso,
-        HourlyReading.timestamp_utc <= query_end_utc_iso
-    ).order_by(HourlyReading.timestamp_utc).all()
-
-    if not readings:
-        return jsonify({"labels": [], "data": []}) # Return empty if no data for range
-
-    # Prepare data for chart, converting timestamps to APP_DISPLAY_TIMEZONE for labels
-    labels = []
-    data_values = []
-    for r in readings:
-        dt_utc = pd.to_datetime(r.timestamp_utc)
-        dt_display = dt_utc.tz_convert(APP_DISPLAY_TIMEZONE)
-        labels.append(dt_display.strftime('%Y-%m-%d %H:%M')) # Format for chart label
-        data_values.append(r.EnergyWh if r.EnergyWh is not None else 0)
-
-    return jsonify({"labels": labels, "data": data_values})
-
 
 @app.route('/forecast')
 def forecast_view():
@@ -433,10 +393,8 @@ def forecast_view():
 
     return render_template('forecast.html',
                            latest_reading=latest_reading_display, # Use new variable name
-                           max_forecast_hours=MAX_FORECAST_HORIZON_APP,
                            retraining_message=current_retraining_msg,
                            retraining_category=current_retraining_cat)
-
 
 @app.route('/run_forecast_dms', methods=['POST'])
 def run_forecast_dms_api():
