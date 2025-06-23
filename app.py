@@ -25,16 +25,13 @@ BACKGROUND_FETCH_INTERVAL_SECONDS = 15 * 60
 LATITUDE_CONFIG = 14.5833
 LONGITUDE_CONFIG = 121.0
 APP_DISPLAY_TIMEZONE = "Asia/Kuala_Lumpur"
-# All internal processing and DB storage will be UTC.
-
-DMS_MODELS_BASE_PATH = 'models_dms/'
 MAX_FORECAST_HORIZON_APP = 24 * 7
 
 DMS_FEATURES_LIST = ['hour', 'day_of_week', 'day_of_month', 'is_weekend',
                      'lag_1', 'lag_24', 'lag_72', 'lag_168', 'temperature']
-DMS_TARGET_COL_DATAFRAME = 'Wh'    # Name of the target column in DataFrames for algo/data modules
-DB_TARGET_COL_NAME = 'EnergyWh'    # Name of the target column in the DB Model
-DB_TEMP_COL_NAME = 'TemperatureCelsius' # Name of the temperature column in the DB Model
+DMS_TARGET_COL_DATAFRAME = 'Wh'    
+DB_TARGET_COL_NAME = 'EnergyWh'
+DB_TEMP_COL_NAME = 'TemperatureCelsius' 
 
 MAX_LAG_HOURS = 0
 for f_name in DMS_FEATURES_LIST:
@@ -42,29 +39,25 @@ for f_name in DMS_FEATURES_LIST:
         try: MAX_LAG_HOURS = max(MAX_LAG_HOURS, int(f_name.split("_")[1]))
         except: pass
 
-# Retraining Configuration
-RETRAIN_CHECK_INTERVAL_SECONDS = 3600 * 6 # Check for retraining eligibility every 6 hours
-RETRAIN_TRIGGER_DAY = 6 # Sunday (0=Monday, 6=Sunday)
-RETRAIN_TRIGGER_HOUR_UTC = 2 # 2 AM UTC on Sunday (time for potentially lower server load)
+RETRAIN_CHECK_INTERVAL_SECONDS = 3600 * 6
+RETRAIN_TRIGGER_DAY = 6 
+RETRAIN_TRIGGER_HOUR_UTC = 2 
 
 retraining_status_message = None
-retraining_status_category = None # To store 'success' or 'error' for styling
+retraining_status_category = None 
 retraining_status_lock = threading.Lock()
 last_retrain_completed_utc = datetime.now(dt_timezone.utc) - timedelta(days=8)
 retraining_active = False
 
-# --- Initialize App, DB ---
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{DATABASE_FILE}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.secret_key = os.urandom(24) # For flash messages
+app.secret_key = os.urandom(24)
 db = SQLAlchemy(app)
-# Make datetime.now(dt_timezone.utc) available in templates
 app.jinja_env.globals['utc_now'] = lambda: datetime.now(dt_timezone.utc)
 
 
-# --- Database Model ---
-class HourlyReading(db.Model): # Renamed for clarity
+class HourlyReading(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     timestamp_utc = db.Column(db.String(20), nullable=False, unique=True, index=True)
     EnergyWh = db.Column(db.Float)
@@ -73,60 +66,45 @@ class HourlyReading(db.Model): # Renamed for clarity
     def __repr__(self):
         return f"<HourlyReading {self.timestamp_utc} - Energy: {self.EnergyWh}>"
 
-# --- Background Data Collection ---
-last_fetched_hour_utc = None # Keep track of the last hour we successfully fetched data for
-
+last_fetched_hour_utc = None
 
 def background_data_collector():
     """Periodically fetches data for the CURRENT hour from Antares and temperature forecast."""
-    global last_fetched_hour_utc # If you still want to track the last processed hour to avoid re-processing within the same interval
+    global last_fetched_hour_utc
     print("Simplified Background Data Collector started (no catch-up)...")
 
-    # Initialize last_fetched_hour_utc based on DB, but only to prevent immediate re-fetch of current hour if app restarts
     with app.app_context():
         latest_db_entry = HourlyReading.query.order_by(HourlyReading.timestamp_utc.desc()).first()
         if latest_db_entry:
             try:
-                # Parse the timestamp and floor it to the hour
-                parsed_ts = pd.to_datetime(latest_db_entry.timestamp_utc).tz_convert('UTC') # Ensure UTC
+                parsed_ts = pd.to_datetime(latest_db_entry.timestamp_utc).tz_convert('UTC')
                 last_fetched_hour_utc = parsed_ts.replace(minute=0, second=0, microsecond=0)
                 print(f"Data Collector: Last stored hour in DB: {last_fetched_hour_utc.isoformat()}")
             except Exception as e:
                 print(f"Data Collector: Error parsing last DB timestamp: {e}. Will proceed as if no prior data for this session.")
-                last_fetched_hour_utc = None # Reset if parsing fails
+                last_fetched_hour_utc = None
         else:
             print("Data Collector: No existing data in DB.")
             last_fetched_hour_utc = None
 
     while True:
         current_time_utc = datetime.now(dt_timezone.utc)
-        # Target the beginning of the current hour
         target_hour_to_process_utc = current_time_utc.replace(minute=0, second=0, microsecond=0)
         target_hour_iso = target_hour_to_process_utc.isoformat()
 
         print(f"Data Collector: Current target hour is {target_hour_iso}")
 
-        # Check if this hour was already processed in a *very recent* previous iteration of this loop
-        # This 'last_fetched_hour_utc' primarily prevents re-processing if the script loops faster than an hour.
         if last_fetched_hour_utc is not None and target_hour_to_process_utc <= last_fetched_hour_utc:
             print(f"Data Collector: Hour {target_hour_iso} already processed or not yet new. Last was {last_fetched_hour_utc.isoformat()}. Sleeping.")
             time.sleep(BACKGROUND_FETCH_INTERVAL_SECONDS)
             continue
 
-        with app.app_context(): # Ensure DB operations are within app context
-            # Check if data for this specific hour ALREADY EXISTS in the database
+        with app.app_context():
             existing_reading_for_target_hour = HourlyReading.query.filter_by(timestamp_utc=target_hour_iso).first()
 
             if existing_reading_for_target_hour:
                 print(f"  Data for {target_hour_iso} already exists in DB. Checking for updates...")
-                # --- Logic to potentially update existing record (Optional) ---
-                # You might want to update if, for example, Antares provides a more accurate cumulative value later in the hour.
-                # For simplicity here, we'll assume if it exists, we might only update if a field was NULL.
-                # Or, if your 'Energy' is cumulative, you might want to fetch latest and update.
-                # This part depends heavily on your data's nature.
 
-                # Example: Update if energy was NULL or if new energy is higher (if EnergyWh is cumulative hourly max)
-                # Fetch fresh Antares data for potential update
                 new_energy_wh_value = None
                 try:
                     antares.setAccessKey(ANTARES_ACCESS_KEY)
@@ -137,28 +115,26 @@ def background_data_collector():
                     print(f"  Error fetching Antares for update check on {target_hour_iso}: {e_ant_update}")
 
                 commit_update_needed = False
-                if new_energy_wh_value is not None: # Only proceed if we got new energy data
+                if new_energy_wh_value is not None: 
                     try:
-                        new_energy_wh_value_float = float(new_energy_wh_value) # Attempt conversion
+                        new_energy_wh_value_float = float(new_energy_wh_value) 
                         if existing_reading_for_target_hour.EnergyWh is None or \
-                           new_energy_wh_value_float > existing_reading_for_target_hour.EnergyWh: # Example update condition
+                           new_energy_wh_value_float > existing_reading_for_target_hour.EnergyWh: 
                             print(f"  Updating Energy for {target_hour_iso}. Stored: {existing_reading_for_target_hour.EnergyWh}, New: {new_energy_wh_value_float}")
                             existing_reading_for_target_hour.EnergyWh = new_energy_wh_value_float
                             commit_update_needed = True
                     except (ValueError, TypeError) as e_conv:
                          print(f"  Antares energy value '{new_energy_wh_value}' for update check on {target_hour_iso} is not a valid number: {e_conv}")
 
-
-                # Example: Update temperature if it was NULL
                 if existing_reading_for_target_hour.TemperatureCelsius is None:
                     print(f"  Temperature for {target_hour_iso} was NULL, attempting to fetch and update.")
                     new_temperature_value = None
                     try:
                         date_str_utc = target_hour_to_process_utc.strftime('%Y-%m-%d')
-                        temp_df = data.temp_fetch(date_str_utc, date_str_utc, LATITUDE_CONFIG, LONGITUDE_CONFIG, historical=False) # Assuming historical=False gets current/forecast
+                        temp_df = data.temp_fetch(date_str_utc, date_str_utc, LATITUDE_CONFIG, LONGITUDE_CONFIG, historical=False) 
                         if temp_df is not None and 'temperature' in temp_df:
                             temp_series = temp_df['temperature']
-                            new_temperature_value = temp_series.get(target_hour_to_process_utc) # Get temp for the specific target hour
+                            new_temperature_value = temp_series.get(target_hour_to_process_utc) 
                             if pd.notna(new_temperature_value):
                                 existing_reading_for_target_hour.TemperatureCelsius = float(new_temperature_value)
                                 commit_update_needed = True
@@ -177,14 +153,12 @@ def background_data_collector():
                 else:
                     print(f"  No updates needed for existing record {target_hour_iso}.")
 
-                last_fetched_hour_utc = target_hour_to_process_utc # Mark this hour as processed for this cycle
+                last_fetched_hour_utc = target_hour_to_process_utc
                 time.sleep(BACKGROUND_FETCH_INTERVAL_SECONDS)
-                continue # Move to next cycle of the main while loop
+                continue 
 
-            # --- If data for target_hour_iso does NOT exist, create new record ---
             print(f"  No existing record for {target_hour_iso}. Fetching new data...")
             energy_wh_value = None
-            # 1. Fetch from Antares
             try:
                 antares.setAccessKey(ANTARES_ACCESS_KEY)
                 latest_antares_data = antares.get(ANTARES_PROJECT_NAME, ANTARES_DEVICE_NAME)
@@ -192,10 +166,10 @@ def background_data_collector():
                     raw_energy = latest_antares_data['content'].get('Energy')
                     if raw_energy is not None:
                         try:
-                            energy_wh_value = float(raw_energy) # Convert to float immediately
+                            energy_wh_value = float(raw_energy) 
                         except (ValueError, TypeError) as e_conv:
                             print(f"  Antares 'Energy' value '{raw_energy}' for {target_hour_iso} is not a valid number: {e_conv}")
-                            energy_wh_value = None # Ensure it's None if conversion fails
+                            energy_wh_value = None 
                     else:
                         print(f"  Antares data for {target_hour_iso} missing 'Energy' key or value is None.")
                 else:
@@ -203,23 +177,18 @@ def background_data_collector():
             except Exception as e_ant:
                 print(f"  Error fetching from Antares for {target_hour_iso}: {e_ant}")
 
-            if energy_wh_value is None: # Check after attempting conversion
+            if energy_wh_value is None: 
                 print(f"  Skipping DB store for {target_hour_iso} due to missing or invalid Antares energy data.")
-                # Not updating last_fetched_hour_utc here, so it will be retried in the next interval
                 time.sleep(BACKGROUND_FETCH_INTERVAL_SECONDS)
                 continue
 
-            # 2. Fetch Temperature Forecast for this specific hour_to_process
-            temperature_value_float = None # Initialize as float or None
+            temperature_value_float = None 
             try:
                 date_str_utc = target_hour_to_process_utc.strftime('%Y-%m-%d')
-                # Assuming temp_fetch is robust and returns a DataFrame with a 'temperature' Series (DatetimeIndexed) or None
                 temp_df = data.temp_fetch(date_str_utc, date_str_utc, LATITUDE_CONFIG, LONGITUDE_CONFIG, historical=False)
                 if temp_df is not None and 'temperature' in temp_df:
                     temp_series = temp_df['temperature']
-                    # Ensure target_hour_to_process_utc is timezone-aware if temp_series.index is
-                    # (already done by datetime.now(dt_timezone.utc))
-                    raw_temp = temp_series.get(target_hour_to_process_utc) # Get temp for the specific target hour
+                    raw_temp = temp_series.get(target_hour_to_process_utc) 
                     if pd.notna(raw_temp): # Check if it's a valid number (not NaN)
                         temperature_value_float = float(raw_temp)
                     else:
@@ -228,40 +197,35 @@ def background_data_collector():
                     print(f"  Temperature data not available or in unexpected format from temp_fetch for {target_hour_iso}.")
             except Exception as e_temp:
                 print(f"  Error fetching/processing temperature for {target_hour_iso}: {e_temp}")
-                # temperature_value_float remains None
 
             # 3. Store in Database
             new_entry = HourlyReading(
                 timestamp_utc=target_hour_iso,
-                EnergyWh=energy_wh_value, # Already a float or this point wouldn't be reached
-                TemperatureCelsius=temperature_value_float # Already a float or None
+                EnergyWh=energy_wh_value,
+                TemperatureCelsius=temperature_value_float
             )
             db.session.add(new_entry)
 
             try:
                 db.session.commit()
-                # Safe printing, assuming EnergyWh and TemperatureCelsius are now guaranteed to be float or None
                 energy_print_val = f"{new_entry.EnergyWh:.2f}" if new_entry.EnergyWh is not None else "N/A"
                 temp_print_val = f"{new_entry.TemperatureCelsius:.2f}" if new_entry.TemperatureCelsius is not None else "N/A"
                 print(f"  Stored new record: {new_entry.timestamp_utc} - Energy: {energy_print_val}, Temp: {temp_print_val}")
                 last_fetched_hour_utc = target_hour_to_process_utc # Successfully stored and processed
             except Exception as e_db_commit:
                 db.session.rollback()
-                # Re-construct the print string carefully for the error message if new_entry might be in a weird state
-                # or simply print the raw error and basic info.
                 energy_val_on_fail = new_entry.EnergyWh if hasattr(new_entry, 'EnergyWh') else 'UNKNOWN_ENERGY'
                 temp_val_on_fail = new_entry.TemperatureCelsius if hasattr(new_entry, 'TemperatureCelsius') else 'UNKNOWN_TEMP'
 
                 print(f"  DB Commit Error for new record {target_hour_iso}: {e_db_commit}.")
                 print(f"    Attempted to store: Energy={repr(energy_val_on_fail)}, Temp={repr(temp_val_on_fail)}")
-                # Not updating last_fetched_hour_utc, so it will be retried
         
         time.sleep(BACKGROUND_FETCH_INTERVAL_SECONDS)
 
 
 # --- Model Retraining ---
-last_retrain_completed_utc = datetime.now(dt_timezone.utc) - timedelta(days=8) # Ensure first check can trigger
-retraining_active = False # Flag to prevent concurrent retraining
+last_retrain_completed_utc = datetime.now(dt_timezone.utc) - timedelta(days=8)
+retraining_active = False
 
 def schedule_dms_retraining():
     """Initiates the DMS model retraining process."""
@@ -280,8 +244,7 @@ def schedule_dms_retraining():
         retraining_status_category = current_status_cat
     
     try:
-        with app.app_context(): # Required for database access within the thread
-            # 1. Fetch all data from the app's database for training
+        with app.app_context(): 
             training_df_utc = data.get_all_data_from_db_for_training(
                 db.session, HourlyReading,
                 output_df_target_col=DMS_TARGET_COL_DATAFRAME, # 'Wh'
@@ -304,8 +267,7 @@ def schedule_dms_retraining():
                 base_data_for_dms_training=training_df_utc,
                 max_forecast_horizon_hours=MAX_FORECAST_HORIZON_APP,
                 features_list=DMS_FEATURES_LIST,
-                target_col=DMS_TARGET_COL_DATAFRAME,
-                models_save_path=DMS_MODELS_BASE_PATH
+                target_col=DMS_TARGET_COL_DATAFRAME
             )
             last_retrain_completed_utc = datetime.now(dt_timezone.utc)
             success_msg = f"DMS models successfully retrained at {last_retrain_completed_utc.isoformat()}."
@@ -320,16 +282,16 @@ def schedule_dms_retraining():
         import traceback; traceback.print_exc()
         with retraining_status_lock:
             retraining_status_message = error_msg
-            retraining_status_category = "danger" # Use 'danger' for Bootstrap alert styling
+            retraining_status_category = "danger" 
     finally:
-        with retraining_status_lock: # Ensure retraining_active is always reset
+        with retraining_status_lock: 
             retraining_active = False
         print("--- Retraining attempt finished. retraining_active set to False. ---")
 
 def background_retraining_scheduler():
     """Checks periodically if it's time to retrain models."""
     print("Background Retraining Scheduler started...")
-    global last_retrain_completed_utc # This global is fine for the scheduler itself
+    global last_retrain_completed_utc 
     while True:
         now_utc = datetime.now(dt_timezone.utc)
         if (now_utc.weekday() == RETRAIN_TRIGGER_DAY and
@@ -337,12 +299,8 @@ def background_retraining_scheduler():
             (now_utc - last_retrain_completed_utc).days >= 7):
             print(f"Retraining condition met (Day: {now_utc.weekday()}, Hour: {now_utc.hour} UTC). Last: {last_retrain_completed_utc.date()}")
             
-            # Run schedule_dms_retraining in its own thread so this scheduler doesn't block
             retrain_job_thread = threading.Thread(target=schedule_dms_retraining)
             retrain_job_thread.start() 
-            # Note: If schedule_dms_retraining is triggered, it will set retraining_active.
-            # The scheduler will continue to run, but new retraining jobs won't start if one is active.
-            # last_retrain_completed_utc is updated *inside* schedule_dms_retraining upon success.
         time.sleep(RETRAIN_CHECK_INTERVAL_SECONDS)
 
 
@@ -354,10 +312,9 @@ def home():
 @app.route('/database_log')
 def database_log_view():
     page = request.args.get('page', 1, type=int)
-    per_page = 50 # Show 50 records per page
+    per_page = 50 
     pagination = HourlyReading.query.order_by(HourlyReading.timestamp_utc.desc()).paginate(page=page, per_page=per_page, error_out=False)
     readings_for_page = pagination.items
-    # Convert UTC strings to display timezone for the template
     readings_display = []
     for r in readings_for_page:
         dt_utc = pd.to_datetime(r.timestamp_utc)
@@ -386,7 +343,7 @@ def forecast_view():
 
     current_retraining_msg = None
     current_retraining_cat = None
-    with retraining_status_lock: # Safely read the status
+    with retraining_status_lock:
         if retraining_status_message:
             current_retraining_msg = retraining_status_message
             current_retraining_cat = retraining_status_category
@@ -406,28 +363,18 @@ def run_forecast_dms_api():
             raise ValueError("Requested forecast hours exceed maximum trained horizon or is invalid.")
     except (ValueError, TypeError, AttributeError):
         return jsonify({"error": f"Invalid timeframe. Max is {MAX_FORECAST_HORIZON_APP}h."}), 400
-
-    # --- Fetch Historical Data ---
-    # We need:
-    # 1. History for lag feature creation (MAX_LAG_HOURS) ending at T-1 (where T is forecast start)
-    # 2. History for display (same length as hours_to_forecast) ending at T-1
     
-    # Total historical points needed from DB: MAX_LAG_HOURS (for features) + hours_to_forecast (for display context)
-    # Ensure we get enough for the *oldest* point needed for lags of the display history.
-    # More simply: get MAX_LAG_HOURS + hours_to_forecast, all ending at the most recent data point.
-    
-    num_records_to_fetch = MAX_LAG_HOURS + hours_to_forecast + 5 # +5 buffer for safety
+    num_records_to_fetch = MAX_LAG_HOURS + hours_to_forecast + 5
 
     history_query_results = HourlyReading.query.order_by(HourlyReading.timestamp_utc.desc()).limit(num_records_to_fetch).all()
 
-    if len(history_query_results) < MAX_LAG_HOURS : # Need at least enough for lags for the first forecast point
+    if len(history_query_results) < MAX_LAG_HOURS : 
         return jsonify({"error": f"Insufficient historical data in DB ({len(history_query_results)} records). "
                                  f"Need at least {MAX_LAG_HOURS} for lags."}), 400
     
-    if len(history_query_results) < hours_to_forecast + 1 and hours_to_forecast > 0 : # +1 because one point is the T-1 for lags
+    if len(history_query_results) < hours_to_forecast + 1 and hours_to_forecast > 0 : 
         print(f"Warning: Not enough historical data ({len(history_query_results)}) to show full {hours_to_forecast}h preceding context. "
               f"Will show what's available.")
-
 
     # Convert query results to DataFrame, oldest first, with UTC DatetimeIndex
     history_list_for_df = []
@@ -442,14 +389,8 @@ def run_forecast_dms_api():
     if full_history_df_utc.empty:
          return jsonify({"error": "Failed to construct historical DataFrame for prediction."}), 500
 
-    # history_df_for_prediction_features will be the part used by algo.predict_dms
-    # It needs to end at the last actual data point to generate features for T+1
-    history_df_for_prediction_features = full_history_df_utc.copy() # Or full_history_df_utc.tail(MAX_LAG_HOURS + few)
-
-    # history_for_display will be the 'hours_to_forecast' period *before* the forecast starts
-    # It ends at the same time as history_df_for_prediction_features.index[-1]
+    history_df_for_prediction_features = full_history_df_utc.copy()
     history_for_display_utc = full_history_df_utc.tail(hours_to_forecast).copy() if hours_to_forecast > 0 else pd.DataFrame()
-
 
     # --- Fetch Future Temperatures (Forecast) ---
     last_known_history_time_utc = history_df_for_prediction_features.index[-1]
@@ -483,14 +424,12 @@ def run_forecast_dms_api():
     # --- Call DMS Prediction ---
     try:
         dms_predictions_series_utc = algo.predict_dms(
-            history_df=history_df_for_prediction_features, # Use the history DataFrame
+            history_df=history_df_for_prediction_features, 
             max_horizon_hours=hours_to_forecast,
             features_list=DMS_FEATURES_LIST,
             target_col=DMS_TARGET_COL_DATAFRAME,
-            models_base_path=DMS_MODELS_BASE_PATH,
             future_exog_series=future_temperatures_df
         )
-    # ... (Error handling for prediction remains the same) ...
     except Exception as e_pred_dms:
         print(f"Error during DMS prediction call: {e_pred_dms}")
         import traceback; traceback.print_exc()
@@ -519,33 +458,30 @@ def run_forecast_dms_api():
     return jsonify({
         "history_labels": history_labels_display,
         "history_data": history_data_display,
-        "forecast_labels": forecast_labels_display, # Renamed from "labels"
-        "forecast_data": forecast_data_display    # Renamed from "data"
+        "forecast_labels": forecast_labels_display, 
+        "forecast_data": forecast_data_display   
     })
 
 
 @app.route('/trigger_manual_retrain', methods=['POST'])
 def trigger_manual_retrain_route():
-    global retraining_active, retraining_status_message, retraining_status_category # Access globals
+    global retraining_active, retraining_status_message, retraining_status_category 
     
-    with retraining_status_lock: # Use lock for checking/setting retraining_active
+    with retraining_status_lock: 
         if retraining_active:
             flash('Retraining is already in progress. Please wait.', 'warning')
         else:
-            # Set a message immediately so user sees feedback before thread starts
             retraining_status_message = "Manual retraining triggered. Check server logs for progress. Status will update here."
             retraining_status_category = "info"
             flash('Manual retraining triggered. Status will update on this page shortly.', 'info')
             
-            # Run retraining in a new thread
             manual_retrain_thread = threading.Thread(target=schedule_dms_retraining)
             manual_retrain_thread.start()
-    return redirect(url_for('forecast_view')) # Redirect immediately
+    return redirect(url_for('forecast_view')) 
 
 
 @app.route('/model_performance')
 def model_performance_view():
-    # Pass any necessary data for initial page load if needed
     return render_template('model_performance.html', max_eval_days=MAX_FORECAST_HORIZON_APP // 24)
 
 @app.route('/calculate_model_performance', methods=['POST'])
@@ -601,7 +537,6 @@ def calculate_model_performance_api():
             max_horizon_hours=eval_period_hours,
             features_list=DMS_FEATURES_LIST,
             target_col=DMS_TARGET_COL_DATAFRAME,
-            models_base_path=DMS_MODELS_BASE_PATH,
             future_exog_series=future_exog_for_eval_period # Actual temperatures for the eval period
         )
     except Exception as e_eval_pred:
@@ -630,7 +565,6 @@ def calculate_model_performance_api():
     else:
         metrics_results['mape'] = float('inf') # Or 'N/A' if all actuals are zero
     
-    # Prepare data for chart (convert to APP_DISPLAY_TIMEZONE for display)
     actuals_display_local = actuals_series_for_metrics.tz_convert(APP_DISPLAY_TIMEZONE)
     predictions_display_local = predictions_for_eval_series.tz_convert(APP_DISPLAY_TIMEZONE)
 
@@ -664,22 +598,9 @@ if __name__ == "__main__":
 
     retraining_scheduler_thread = threading.Thread(target=background_retraining_scheduler, daemon=True)
     retraining_scheduler_thread.start()
-    
-    # Optional: Trigger an initial training if no models exist or DB is freshly populated
-    # This is a simplified check; a more robust check would see if all DMS_MODELS_BASE_PATH/dms_model_horizon_h.pkl exist
-    time.sleep(5) # Give app a moment to fully initialize before checking models
-    if not os.path.exists(os.path.join(DMS_MODELS_BASE_PATH, f"dms_model_horizon_{MAX_FORECAST_HORIZON_APP}h.pkl")):
-        print("Initial models not found. Will attempt initial training if data is available...")
-        with app.app_context():
-            if HourlyReading.query.first(): # Check if there's any data at all
-                print("Data found in DB. Triggering initial training...")
-                # Run initial training in a separate thread so it doesn't block app startup
-                initial_train_thread = threading.Thread(target=schedule_dms_retraining)
-                initial_train_thread.start()
-            else:
-                print("No data in DB for initial training. Please wait for data collection or add data manually if needed.")
 
     # For production, use a proper WSGI server like Gunicorn or uWSGI
     # threaded=True is okay for development with background tasks
     # use_reloader=False is important when using threads to avoid issues with the reloader
+        #    ngrok http --url=sincere-moccasin-likely.ngrok-free.app 5000
     app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False, threaded=True)

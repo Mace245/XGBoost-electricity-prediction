@@ -6,38 +6,36 @@ import socket
 import struct
 from flask import Flask, render_template, jsonify, request, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import func
 from antares_http import antares # Keep for Antares API
+from zoneinfo import ZoneInfo
 
 # --- Configuration ---
-ANTARES_ACCESS_KEY = '5cd4cda046471a89:75f9e1c6b34bf41a' # Your Antares Key
-ANTARES_PROJECT_NAME = 'UjiCoba_TA' # Your Antares Project
-ANTARES_DEVICE_NAME = 'TA_DKT1' # Your Antares Device
+ANTARES_ACCESS_KEY = 'fe5c7a15d8c13220:bfd764392a99a094' # Your Antares Key
+ANTARES_PROJECT_NAME = 'TADKT-1' # Your Antares Project
+ANTARES_DEVICE_NAME = 'PMM' # Your Antares Device
 DATABASE_FILE = 'mrp.db' # Renamed DB file
-CHECK_INTERVAL_SECONDS = 5 # How often to check for new hour
-LATITUDE = 14.5833 # Keep for temp fetching
-LONGITUDE = 121.0 # Keep for temp fetching
-API_TIMEZONE = "Asia/Kuala_Lumpur" # For internal processing if needed
+CHECK_INTERVAL_SECONDS = 15 # How often to check for new hour
 NTP_SERVER = 'pool.ntp.org' # For reliable time checks
-# Removed: MODEL_FILE, MODEL_FEATURES, TARGET_VARIABLE, MAX_LAG
 
-# --- Initialize App, DB ---
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{DATABASE_FILE}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 app.jinja_env.globals['now'] = datetime.utcnow # For footer timestamp
 
-# --- Removed Model Loading Section ---
-
-# --- Database Model (Kept as is) ---
+# --- Database Model (Unchanged) ---
 class dbReading(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    # Store timestamp as UTC string for simplicity with SQLite
     DateTime = db.Column(db.String(19), nullable=False, unique=True, index=True)
-    DailyEnergy = db.Column(db.Float) # Energy value from Antares
-    Power = db.Column(db.Float, nullable=True) # Optional Power
+    Energy = db.Column(db.Float) 
+    Power = db.Column(db.Float, nullable=True)
+    Ampere = db.Column(db.Float, nullable=True)
+    Voltage = db.Column(db.Float, nullable=True)
+    Co2 = db.Column(db.Float, nullable=True)
+    Co2_cost = db.Column(db.Float, nullable=True)
 
-# --- NTP Time Fetch (Kept as is) ---
+# --- Data Fetching Logic (Largely Unchanged) ---
 def get_ntp_time(server="pool.ntp.org"):
     """Gets current UTC time from an NTP server."""
     NTP_PORT, NTP_PACKET_FORMAT, NTP_DELTA = 123, "!12I", 2208988800
@@ -62,183 +60,147 @@ def get_ntp_time(server="pool.ntp.org"):
     finally:
         if client: client.close()
 
-# --- Background Hourly Data Fetch (Kept, fetches Antares Energy + Optional Temp) ---
 def fetch_and_store_hourly_data(target_hour_dt_utc: datetime):
-    """Fetches Antares data and optional Power, stores hourly record if new."""
     with app.app_context():
-        # Format timestamp as YYYY-MM-DD HH:MM:00 string (UTC)
-        formatted_ts = target_hour_dt_utc.strftime('%Y-%m-%d %H:%M:00')
+        # Store data at the exact interval, not just the top of the hour
+        formatted_ts = target_hour_dt_utc.strftime('%Y-%m-%d %H:%M:%S')
 
-        # Check if data for this hour already exists
         if dbReading.query.filter_by(DateTime=formatted_ts).first():
-            print(f"Hourly Store: Data for {formatted_ts} UTC already exists. Skipping.")
+            # print(f"Store: Data for {formatted_ts} UTC already exists. Skipping.")
             return
 
         try:
-            # Fetch from Antares
             antares.setAccessKey(ANTARES_ACCESS_KEY)
-            # Get the latest data point from Antares
             latest_data = antares.get(ANTARES_PROJECT_NAME, ANTARES_DEVICE_NAME)
 
             if not latest_data or 'content' not in latest_data:
-                print(f"Hourly Store Error: Invalid or empty data received from Antares near {formatted_ts} UTC.")
+                print(f"Store Error: Invalid or empty data received from Antares near {formatted_ts} UTC.")
                 return
 
             content = latest_data['content']
-            energy_wh = content.get('Power') # Adjust 'Energy' if key name is different
 
-            if energy_wh is None:
-                print(f"Hourly Store Warning: 'Energy' key not found in Antares data for {formatted_ts} UTC.")
-                # Decide if you want to store a record with NULL energy or skip
-                # return # Example: Skip if energy is missing
-
-            # Fetch Optional Power Data for the target hour
-            daily_energy = content.get('DailyEnergy')
-
-            # Create and store new database record
+            if content.get('timestamp'):
+                print('diff format')
+                return
+            
             new_reading = dbReading(
                 DateTime=formatted_ts,
-                DailyEnergy=daily_energy, # Store None if energy was missing
-                Power=energy_wh   # Store None if temp fetch failed
+                Energy=content.get('Energy'),
+                Power=content.get('Power'),
+                Ampere=content.get('Current'),
+                Voltage=content.get('Voltage'),
+                Co2=content.get('TotalCO2'),
+                Co2_cost=content.get('TotalCost')
             )
             db.session.add(new_reading)
             db.session.commit()
-            print(f"Stored Hourly: {formatted_ts} UTC - Energy(Wh): {energy_wh if energy_wh is not None else 'N/A'}, Energy: {daily_energy if daily_energy is not None else 'N/A'}")
+            print(f"Stored: Data for {formatted_ts} UTC")
 
         except Exception as e:
-            db.session.rollback() # Rollback DB changes on error
-            print(f"Hourly Store Error during Antares/DB operation for {formatted_ts} UTC: {e}")
+            db.session.rollback()
+            print(f"Store Error during Antares/DB operation for {formatted_ts} UTC: {e}")
 
-# --- Background NTP Checker (Kept as is) ---
 def background_ntp_checker():
-    """Periodically checks NTP time and triggers hourly fetch on hour change."""
     print("Background NTP Checker started...")
-    previous_ntp_time_utc = None
+    jakarta_tz = ZoneInfo('Asia/Jakarta')
     while True:
         current_ntp_time_utc = get_ntp_time(NTP_SERVER)
         if current_ntp_time_utc is not None:
-            fetch_and_store_hourly_data(target_hour_dt_utc=current_ntp_time_utc)
+            current_time_jakarta = current_ntp_time_utc.astimezone(jakarta_tz)
+            # Now you can use the Jakarta time to fetch data
+            fetch_and_store_hourly_data(target_hour_dt_utc=current_time_jakarta)
+            time.sleep(CHECK_INTERVAL_SECONDS)
 
-        # Wait before the next check
-        time.sleep(CHECK_INTERVAL_SECONDS)
+# --- Refactored Web Routes ---
 
-# --- Flask Routes ---
+# Dictionary to map URL metric names to database columns and units
+METRIC_CONFIG = {
+    'energy': {'column': dbReading.Energy, 'unit': 'Wh'},
+    'power': {'column': dbReading.Power, 'unit': 'W'},
+    'ampere': {'column': dbReading.Ampere, 'unit': 'A'},
+    'voltage': {'column': dbReading.Voltage, 'unit': 'V'},
+    'co2': {'column': dbReading.Co2, 'unit': 'g'},
+    'co2_cost': {'column': dbReading.Co2_cost, 'unit': 'IDR'}
+}
+ALLOWED_GRANULARITIES = ['hourly', 'daily', 'monthly']
 
 @app.route('/')
 def home():
-    """Redirects the base URL to the database view."""
-    return redirect(url_for('database_genergy_hourly')) # Changed redirect
+    """Redirects the base URL to a default view."""
+    return redirect(url_for('unified_view', metric='power', granularity='daily'))
 
-# This API endpoint provides data for the JS chart updater
-@app.route('/get_range_data')
-def get_range_data():
-    """API endpoint to provide data for the database graph based on date range."""
-    start_date = request.args.get('start_date') # Expects YYYY-MM-DD
-    end_date = request.args.get('end_date')     # Expects YYYY-MM-DD
+@app.route('/view/<string:metric>/<string:granularity>')
+def unified_view(metric, granularity):
+    """A single route to display all data combinations."""
+    if metric not in METRIC_CONFIG or granularity not in ALLOWED_GRANULARITIES:
+        return "Error: Invalid metric or granularity specified.", 404
 
-    if not (start_date and end_date):
-        return jsonify({"error": "Start and end dates are required."}), 400
-
-    try:
-        # Format for comparison with DateTime strings (YYYY-MM-DD HH:MM:SS)
-        start_dt_str = f"{start_date} 00:00:00"
-        end_dt_str = f"{end_date} 23:59:59"
-
-        # Query the database for the specified range, order by time for the graph
-        readings = dbReading.query.filter(
-            dbReading.DateTime >= start_dt_str,
-            dbReading.DateTime <= end_dt_str
-        ).order_by(dbReading.DateTime).all()
-
-        # Prepare data for Chart.js
-        labels = [r.DateTime for r in readings]
-        # Ensure energy/power data exists or provide default (e.g., null/0)
-        energy_data = [r.DailyEnergy if r.DailyEnergy is not None else None for r in readings]
-        power_data = [r.Power if r.Power is not None else None for r in readings] # Use null for missing power
-
-        return jsonify({
-            "labels": labels,
-            "energyData": energy_data,
-            "powerData": power_data
-        })
-    except ValueError:
-         return jsonify({"error": "Invalid date format provided. Use YYYY-MM-DD."}), 400
-    except Exception as e:
-        print(f"Error in /get_range_data: {e}")
-        return jsonify({"error": "Failed to retrieve data for the specified range."}), 500
-
-    except ValueError:
-        # Handle cases where the date format in the URL is invalid
-        return "Invalid date format in URL. Use ISO format like YYYY-MM-DDTHH:MM:SS.", 400
-    except Exception as e:
-        # Catch other potential errors during database query or processing
-        print(f"Error generating graph for range{e}")
-        return "Error generating graph data.", 500
+    config = METRIC_CONFIG[metric]
+    metric_column = config['column']
+    unit = config['unit']
     
-@app.route('/genergy_monthly')
-def monthly_summary():
-    all_readings = dbReading.query.order_by(dbReading.DateTime.asc()).all()
-    data_for_js = [
-        {
-            "DateTime": r.DateTime,
-            "Power": r.Power
-        } for r in all_readings
-    ]
-    return render_template('genergy_monthly.html', readings=data_for_js)
+    # Base query
+    query = db.session.query(metric_column)
     
-@app.route('/genergy_daily')
-def database_genergy_daily():
-    # No need to pass readings here if the graph loads dynamically via JS
-    # If you still want a table below the graph, keep fetching all_readings
-    all_readings = dbReading.query.order_by(dbReading.DateTime.desc()).all()
-    return render_template('genergy_daily.html', readings=all_readings) # Pass readings if table needed
+    # --- Data Aggregation ---
+    if granularity == 'hourly':
+        # For hourly, we just take the raw data points
+        query = db.session.query(
+            dbReading.DateTime,
+            metric_column
+        ).order_by(dbReading.DateTime.asc())
+        results = query.all()
+        
+    elif granularity == 'daily':
+        # Group by day and average the values
+        query = db.session.query(
+            func.strftime('%Y-%m-%d', dbReading.DateTime).label('date'),
+            func.avg(metric_column).label('value')
+        ).group_by('date').order_by('date')
+        results = query.all()
 
-@app.route('/genergy_hourly')
-def database_genergy_hourly():
-    """Displays the full data table and graph controls."""
-    # Fetch all readings, ordered most recent first for the table display
-    all_readings = dbReading.query.order_by(dbReading.DateTime.desc()).all()
-    return render_template('genergy_hourly.html', readings=all_readings)
+    elif granularity == 'monthly':
+        # Group by month and average the values
+        query = db.session.query(
+            func.strftime('%Y-%m', dbReading.DateTime).label('month'),
+            func.avg(metric_column).label('value')
+        ).group_by('month').order_by('month')
+        results = query.all()
 
-@app.route('/gpower_daily')
-def database_gpower_daily():
-    all_readings = dbReading.query.order_by(dbReading.DateTime.desc()).all()
-    return render_template('gpower_daily.html', readings=all_readings)
+    # --- Prepare data for template ---
+    # `results` is a list of tuples, e.g., ('2025-06-11', 150.5)
+    labels = [row[0] for row in results]
+    data_points = [round(row[1], 2) if row[1] is not None else 0 for row in results]
+    
+    # For the HTML table
+    table_rows = [{"timestamp": row[0], "value": round(row[1], 2) if row[1] is not None else "N/A"} for row in reversed(results)]
 
-@app.route('/gpower_hourly')
-def database_gpower_hourly():
-    all_readings = dbReading.query.order_by(dbReading.DateTime.desc()).all()
-    return render_template('gpower_hourly.html', readings=all_readings)
+    # Data to pass to the template
+    context = {
+        "title": f"{granularity.capitalize()} {metric.replace('_', ' ').title()}",
+        "chart_labels": labels,
+        "chart_data": data_points,
+        "chart_unit": unit,
+        "table_headers": [granularity.capitalize() + " Timestamp", f"Value ({unit})"],
+        "table_rows": table_rows,
+        "navigation": {
+            "metrics": METRIC_CONFIG.keys(),
+            "granularities": ALLOWED_GRANULARITIES,
+            "current_metric": metric,
+            "current_granularity": granularity
+        }
+    }
 
-@app.route('/database_text')
-def database_text():
-    all_readings = dbReading.query.order_by(dbReading.DateTime.desc()).all()
-    return render_template('database_text.html', readings=all_readings)
+    return render_template('display.html', **context)
 
-# --- Main Execution ---
+# --- Main Execution (Unchanged) ---
 if __name__ == "__main__":
-    # Ensure database exists when the app starts
     with app.app_context():
         db.create_all()
         print(f"Database '{DATABASE_FILE}' ensured/created.")
 
-    # Start the background thread for fetching data
     fetch_thread = threading.Thread(target=background_ntp_checker, daemon=True)
     fetch_thread.start()
 
     print("\n--- Flask App Starting ---")
-    print(f"Fetching Antares data for: {ANTARES_PROJECT_NAME}/{ANTARES_DEVICE_NAME}")
-    print(f"Storing data in: {DATABASE_FILE}")
-    print(f"Checking for new hour every {CHECK_INTERVAL_SECONDS} seconds.")
-    print("Web Interface available at: http://localhost:5000 (or http://<your-ip>:5000)")
-    print("--------------------------\n")
-
-    # To expose this app using ngrok:
-    # 3. After starting this Python script, open another terminal and run:
-    #    ngrok http --url=sincere-moccasin-likely.ngrok-free.app 5000
-
-    # Run the Flask development server
-    # host='0.0.0.0' makes it accessible on your network
-    # use_reloader=False is important when using threads
     app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
-

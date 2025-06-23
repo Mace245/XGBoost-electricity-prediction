@@ -3,12 +3,10 @@ import pandas as pd
 import xgboost as xgb
 from sklearn.model_selection import TimeSeriesSplit
 import numpy as np
-# from statsmodels.tsa.seasonal import seasonal_decompose # Not used in current DMS
 import pickle
 from lib import data
 import os
 
-# --- Feature Engineering (Keep as is) ---
 def create_time_features(data_df):
     data_df = data_df.copy()
     data_df['hour'] = data_df.index.hour
@@ -22,19 +20,16 @@ def create_lagged_features(data_df, target_col='Wh'):
     data_df = data_df.copy()
     for lag in lags:
         data_df[f'lag_{lag}'] = data_df[target_col].shift(lag)
-    # Drop NaNs created by the shift *within this function*
-    # data_df = data_df.dropna(subset=[f'lag_{lag}' for lag in lags]) # Careful with this, might drop too much if called sequentially.
-                                                                # create_dms_training_data will handle final dropna
     return data_df
 
 def train_xgboost_model(X_train, y_train):
     model = xgb.XGBRegressor(
-        max_depth=3, learning_rate=0.09, n_estimators=230,
-        colsample_bytree=0.84, subsample=0.81, reg_alpha=0, reg_lambda=0.19, min_child_weight=3,
+        max_depth=4, learning_rate=0.3, n_estimators=1000,
+        colsample_bytree=1, subsample=0.3, reg_alpha=0, reg_lambda=1,
         n_jobs=None, early_stopping_rounds=50, eval_metric='rmse', 
         # tree_method= 'gpu_hist', device='cuda:0'
     )
-    tss = TimeSeriesSplit(n_splits=3)
+    tss = TimeSeriesSplit(n_splits=10, test_size=24*7, gap=24)
     scores = []
     # print(f"    Inside train_xgboost_model. X_train shape: {X_train.shape}, y_train shape: {y_train.shape}")
 
@@ -46,59 +41,48 @@ def train_xgboost_model(X_train, y_train):
     print(f"    Avg Validation Score for this horizon model: {np.mean(scores):.4f}")
     return model
 
-# --- DMS Training Orchestration ---
 def train_all_dms_horizon_models(
     base_data_for_dms_training: pd.DataFrame,
     max_forecast_horizon_hours: int,
     features_list: list[str],
     target_col: str,
-    models_save_path: str = 'models/' # Allow specifying save path
 ):
-    print(f"Starting DMS model training for horizons 1 to {max_forecast_horizon_hours} hours.")
-    print(f"Using base data of shape: {base_data_for_dms_training.shape}. TZ: {base_data_for_dms_training.index.tz if hasattr(base_data_for_dms_training.index, 'tz') else 'None'}")
-
-    if not models_save_path.endswith('/'):
-        models_save_path += '/'
-    os.makedirs(models_save_path, exist_ok=True) # Ensure models directory exists
-
+    print(f"Model training horizon 1 to {max_forecast_horizon_hours} hours. \n Using base data of shape: {base_data_for_dms_training.shape}. TZ: {base_data_for_dms_training.index.tz if hasattr(base_data_for_dms_training.index, 'tz') else 'None'}")
 
     for h in range(1, max_forecast_horizon_hours + 1):
         print(f"  Training DMS model for horizon h={h}...")
 
-        # Use the data module's function to prepare X and y for this horizon
         training_data_for_h = data.create_dms_training_data_for_horizon(
-            merged_data_full=base_data_for_dms_training, # Pass the training portion
+            merged_data_full=base_data_for_dms_training, 
             features_list=features_list,
             target_col=target_col,
             horizon=h
         )
 
         print(f"    Training XGBoost model with {len(training_data_for_h.X)} samples for h={h}...")
-        model_for_h = train_xgboost_model( # This is the local train_xgboost_model
+        model_for_h = train_xgboost_model( 
             X_train=training_data_for_h.X,
             y_train=training_data_for_h.y
         )
+
         if model_for_h is None:
             print(f"    Failed to train model for h={h}. Skipping save.")
             continue
         print(f"    XGBoost model training complete for h={h}.")
 
-        model_filename = f'{models_save_path}dms_model_horizon_{h}h.pkl'
-        try:
-            with open(model_filename, 'wb') as f:
-                pickle.dump(model_for_h, f)
-            print(f"    Saved DMS model for horizon h={h} to {model_filename}")
-        except Exception as e:
-            print(f"    Error saving model for h={h}: {e}")
+        model_filename = f'models/dms_model_horizon_{h}h.pkl'
+        with open(model_filename, 'wb') as f:
+            pickle.dump(model_for_h, f)
+        print(f"    Saved DMS model for horizon h={h} to {model_filename}")
+
     print("All DMS horizon model training complete.")
 
 
-# --- DMS Prediction ---
 def predict_dms(
     history_df: pd.DataFrame,
     max_horizon_hours: int,
-    features_list: list[str], # Added parameter
-    target_col: str,          # Added parameter
+    features_list: list[str], 
+    target_col: str,          
     models_base_path: str = 'models/',
     future_exog_series: pd.DataFrame = None
 ):

@@ -114,7 +114,7 @@ def inject_data_from_csv_with_temp_prefetch(csv_filepath):
 
     create_table_if_not_exists(conn)
     added_count, skipped_count, processed_rows, current_batch_count = 0, 0, 0, 0
-    batch_size = 200 # Commit in larger batches
+    batch_size = 1000000 # Commit in larger batches
 
     try:
         # --- Step 1: Read CSV and determine date range for temperature prefetch ---
@@ -231,13 +231,11 @@ def inject_data_from_csv_with_temp_prefetch(csv_filepath):
         if conn: conn.close(); print("DB connection closed.")
 
 
-if __name__ == "__main__":
-    csv_file_to_inject = input(f"Enter path to CSV (needs '{CSV_COL_DATETIME}', '{CSV_COL_ENERGY}' headers, e.g., data.csv): ")
-    csv_file_to_inject = 'Data/processed_hourly_Wh_data.csv' # For quick testing
-    if not csv_file_to_inject: print("No CSV specified. Exiting.")
-    elif not os.path.exists(csv_file_to_inject): print(f"Error: File '{csv_file_to_inject}' does not exist.")
-    else:
-        print(f"Starting data injection from: {csv_file_to_inject}")
-        print(f"Using Location: Kuala Lumpur (Lat: {LATITUDE_CONFIG}, Lon: {LONGITUDE_CONFIG})")
-        print(f"Assuming CSV DateTime input timezone: {CSV_DATETIME_INPUT_TIMEZONE}")
-        inject_data_from_csv_with_temp_prefetch(csv_file_to_inject)
+csv_file_to_inject = 'Data/processed_hourly_Wh_data.csv'
+if not csv_file_to_inject: print("No CSV specified. Exiting.")
+elif not os.path.exists(csv_file_to_inject): print(f"Error: File '{csv_file_to_inject}' does not exist.")
+else:
+    print(f"Starting data injection from: {csv_file_to_inject}")
+    print(f"Using Location: Kuala Lumpur (Lat: {LATITUDE_CONFIG}, Lon: {LONGITUDE_CONFIG})")
+    print(f"Assuming CSV DateTime input timezone: {CSV_DATETIME_INPUT_TIMEZONE}")
+    inject_data_from_csv_with_temp_prefetch(csv_file_to_inject)
