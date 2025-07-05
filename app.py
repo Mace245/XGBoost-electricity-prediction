@@ -17,16 +17,19 @@ from lib import algo
 ANTARES_ACCESS_KEY = '5cd4cda046471a89:75f9e1c6b34bf41a'
 ANTARES_PROJECT_NAME = 'UjiCoba_TA'
 ANTARES_DEVICE_NAME = 'TA_DKT1'
+FETCH_ENABLED = False
 
+# --- MODIFIED: New DB name to avoid conflicts ---
 DATABASE_FILE = 'energy_app_dms_simplified.db'
 
-BACKGROUND_FETCH_INTERVAL_SECONDS = 15 * 60
+BACKGROUND_FETCH_INTERVAL_SECONDS = 360 * 60
 
 LATITUDE_CONFIG = 14.5833
 LONGITUDE_CONFIG = 121.0
 APP_DISPLAY_TIMEZONE = "Asia/Kuala_Lumpur"
 MAX_FORECAST_HORIZON_APP = 24 * 7
 
+# Variable names kept for minimal changes, though "DMS" is no longer the method
 DMS_FEATURES_LIST = ['hour', 'day_of_week', 'day_of_month', 'is_weekend',
                      'lag_1', 'lag_24', 'lag_72', 'lag_168', 'temperature']
 DMS_TARGET_COL_DATAFRAME = 'Wh'    
@@ -66,8 +69,8 @@ class HourlyReading(db.Model):
     def __repr__(self):
         return f"<HourlyReading {self.timestamp_utc} - Energy: {self.EnergyWh}>"
 
-last_fetched_hour_utc = None
-
+# --- The rest of the background_data_collector function is unchanged ---
+# ... (background_data_collector code is identical to previous versions) ...
 def background_data_collector():
     """Periodically fetches data for the CURRENT hour from Antares and temperature forecast."""
     global last_fetched_hour_utc
@@ -198,7 +201,6 @@ def background_data_collector():
             except Exception as e_temp:
                 print(f"  Error fetching/processing temperature for {target_hour_iso}: {e_temp}")
 
-            # 3. Store in Database
             new_entry = HourlyReading(
                 timestamp_utc=target_hour_iso,
                 EnergyWh=energy_wh_value,
@@ -222,20 +224,15 @@ def background_data_collector():
         
         time.sleep(BACKGROUND_FETCH_INTERVAL_SECONDS)
 
-
-# --- Model Retraining ---
-last_retrain_completed_utc = datetime.now(dt_timezone.utc) - timedelta(days=8)
-retraining_active = False
-
-def schedule_dms_retraining():
-    """Initiates the DMS model retraining process."""
+def schedule_dms_retraining(): # Name kept for minimal changes
+    """Initiates the Profile model retraining process."""
     global retraining_active, last_retrain_completed_utc
     with retraining_status_lock:
         if retraining_active:
             print("Retraining is already active. New trigger ignored.")
             return
         retraining_active = True
-    print("\n--- INITIATING DMS MODEL RETRAINING ---")
+    print("\n--- INITIATING PROFILE MODEL RETRAINING ---")
     current_status_msg = "Retraining in progress..."
     current_status_cat = "info"
 
@@ -247,30 +244,32 @@ def schedule_dms_retraining():
         with app.app_context(): 
             training_df_utc = data.get_all_data_from_db_for_training(
                 db.session, HourlyReading,
-                output_df_target_col=DMS_TARGET_COL_DATAFRAME, # 'Wh'
-                output_df_temp_col='temperature',           # 'temperature'
-                model_actual_target_attr=DB_TARGET_COL_NAME,    # 'EnergyWh'
-                model_actual_temp_attr=DB_TEMP_COL_NAME     # 'TemperatureCelsius'
+                output_df_target_col=DMS_TARGET_COL_DATAFRAME,
+                output_df_temp_col='temperature',
+                model_actual_target_attr=DB_TARGET_COL_NAME,
+                model_actual_temp_attr=DB_TEMP_COL_NAME
             )
 
-            if training_df_utc.empty or len(training_df_utc) < (MAX_LAG_HOURS + MAX_FORECAST_HORIZON_APP + 24):
+            if training_df_utc.empty or len(training_df_utc) < (MAX_LAG_HOURS + 24):
                 msg = (f"  Insufficient data for retraining ({len(training_df_utc)} records). "
-                       f"Need > {MAX_LAG_HOURS + MAX_FORECAST_HORIZON_APP + 24}. Retraining aborted.")
+                       f"Need > {MAX_LAG_HOURS + 24}. Retraining aborted.")
                 print(msg)
                 with retraining_status_lock:
                     retraining_status_message = msg
                     retraining_status_category = "warning"
                 return 
 
-            print(f"  Retraining DMS models with {len(training_df_utc)} data points.")
-            algo.train_all_dms_horizon_models(
-                base_data_for_dms_training=training_df_utc,
-                max_forecast_horizon_hours=MAX_FORECAST_HORIZON_APP,
+            print(f"  Retraining profile model with {len(training_df_utc)} data points.")
+            
+            # --- MODIFIED: Call the new single profile training function ---
+            algo.train_profile_model(
+                base_data_for_training=training_df_utc,
                 features_list=DMS_FEATURES_LIST,
                 target_col=DMS_TARGET_COL_DATAFRAME
             )
+            
             last_retrain_completed_utc = datetime.now(dt_timezone.utc)
-            success_msg = f"DMS models successfully retrained at {last_retrain_completed_utc.isoformat()}."
+            success_msg = f"Profile model successfully retrained at {last_retrain_completed_utc.isoformat()}."
             print(f"--- {success_msg} ---")
             with retraining_status_lock:
                 retraining_status_message = success_msg
@@ -278,7 +277,7 @@ def schedule_dms_retraining():
 
     except Exception as e:
         error_msg = f"Error during model retraining: {e}"
-        print(f"--- FATAL ERROR DURING DMS RETRAINING: {e} ---")
+        print(f"--- FATAL ERROR DURING PROFILE MODEL RETRAINING: {e} ---")
         import traceback; traceback.print_exc()
         with retraining_status_lock:
             retraining_status_message = error_msg
@@ -299,12 +298,13 @@ def background_retraining_scheduler():
             (now_utc - last_retrain_completed_utc).days >= 7):
             print(f"Retraining condition met (Day: {now_utc.weekday()}, Hour: {now_utc.hour} UTC). Last: {last_retrain_completed_utc.date()}")
             
+            # Name `schedule_dms_retraining` is kept, but it calls the new logic
             retrain_job_thread = threading.Thread(target=schedule_dms_retraining)
             retrain_job_thread.start() 
         time.sleep(RETRAIN_CHECK_INTERVAL_SECONDS)
 
 
-# --- Flask Routes ---
+# --- Flask Routes (unchanged except for the algo.predict call) ---
 @app.route('/')
 def home():
     return redirect(url_for('forecast_view'))
@@ -349,14 +349,14 @@ def forecast_view():
             current_retraining_cat = retraining_status_category
 
     return render_template('forecast.html',
-                           latest_reading=latest_reading_display, # Use new variable name
+                           latest_reading=latest_reading_display,
                            retraining_message=current_retraining_msg,
                            retraining_category=current_retraining_cat)
 
-@app.route('/run_forecast_dms', methods=['POST'])
+@app.route('/run_forecast_dms', methods=['POST']) # Route name kept for minimal changes
 def run_forecast_dms_api():
     req_data = request.get_json()
-    timeframe_selected_str = req_data.get('timeframe') # e.g., "24h"
+    timeframe_selected_str = req_data.get('timeframe')
     try:
         hours_to_forecast = int(timeframe_selected_str.replace('h', ''))
         if not (0 < hours_to_forecast <= MAX_FORECAST_HORIZON_APP):
@@ -365,7 +365,6 @@ def run_forecast_dms_api():
         return jsonify({"error": f"Invalid timeframe. Max is {MAX_FORECAST_HORIZON_APP}h."}), 400
     
     num_records_to_fetch = MAX_LAG_HOURS + hours_to_forecast + 5
-
     history_query_results = HourlyReading.query.order_by(HourlyReading.timestamp_utc.desc()).limit(num_records_to_fetch).all()
 
     if len(history_query_results) < MAX_LAG_HOURS : 
@@ -373,10 +372,8 @@ def run_forecast_dms_api():
                                  f"Need at least {MAX_LAG_HOURS} for lags."}), 400
     
     if len(history_query_results) < hours_to_forecast + 1 and hours_to_forecast > 0 : 
-        print(f"Warning: Not enough historical data ({len(history_query_results)}) to show full {hours_to_forecast}h preceding context. "
-              f"Will show what's available.")
+        print(f"Warning: Not enough historical data ({len(history_query_results)}) to show full {hours_to_forecast}h preceding context.")
 
-    # Convert query results to DataFrame, oldest first, with UTC DatetimeIndex
     history_list_for_df = []
     for r_hist in history_query_results:
         history_list_for_df.append({
@@ -392,7 +389,6 @@ def run_forecast_dms_api():
     history_df_for_prediction_features = full_history_df_utc.copy()
     history_for_display_utc = full_history_df_utc.tail(hours_to_forecast).copy() if hours_to_forecast > 0 else pd.DataFrame()
 
-    # --- Fetch Future Temperatures (Forecast) ---
     last_known_history_time_utc = history_df_for_prediction_features.index[-1]
     forecast_period_start_utc = last_known_history_time_utc + timedelta(hours=1)
     forecast_period_end_utc = last_known_history_time_utc + timedelta(hours=hours_to_forecast)
@@ -402,9 +398,7 @@ def run_forecast_dms_api():
         end_date_utc = forecast_period_end_utc.strftime('%Y-%m-%d')
         temp_fcst_utc = data.temp_fetch(start_date_utc, end_date_utc, LATITUDE_CONFIG, LONGITUDE_CONFIG, historical=False)
         if temp_fcst_utc is not None and not temp_fcst_utc.empty:
-            required_future_idx_utc = pd.date_range(start=forecast_period_start_utc,
-                                                    end=forecast_period_end_utc,
-                                                    freq='h', tz='UTC')
+            required_future_idx_utc = pd.date_range(start=forecast_period_start_utc, end=forecast_period_end_utc, freq='h', tz='UTC')
             aligned_temps = temp_fcst_utc['temperature'].reindex(required_future_idx_utc, method='ffill').ffill()
             future_temperatures_df = pd.DataFrame({'temperature': aligned_temps})
             if future_temperatures_df['temperature'].isna().any():
@@ -415,45 +409,39 @@ def run_forecast_dms_api():
     if future_temperatures_df is None or future_temperatures_df.empty:
         print("  Executing temperature fallback for forecast period.")
         last_hist_temp = history_df_for_prediction_features['temperature'].dropna().iloc[-1] if not history_df_for_prediction_features['temperature'].dropna().empty else 25.0
-        required_future_idx_utc = pd.date_range(start=forecast_period_start_utc,
-                                                end=forecast_period_end_utc,
-                                                freq='h', tz='UTC')
+        required_future_idx_utc = pd.date_range(start=forecast_period_start_utc, end=forecast_period_end_utc, freq='h', tz='UTC')
         future_temperatures_df = pd.DataFrame({'temperature': last_hist_temp}, index=required_future_idx_utc)
 
-
-    # --- Call DMS Prediction ---
     try:
-        dms_predictions_series_utc = algo.predict_dms(
+        # --- MODIFIED: Call the new profile prediction function ---
+        predictions_series_utc = algo.predict_profile(
             history_df=history_df_for_prediction_features, 
             max_horizon_hours=hours_to_forecast,
             features_list=DMS_FEATURES_LIST,
             target_col=DMS_TARGET_COL_DATAFRAME,
             future_exog_series=future_temperatures_df
         )
-    except Exception as e_pred_dms:
-        print(f"Error during DMS prediction call: {e_pred_dms}")
+    except Exception as e_pred_profile:
+        print(f"Error during Profile prediction call: {e_pred_profile}")
         import traceback; traceback.print_exc()
-        return jsonify({"error": f"Forecast generation error: {str(e_pred_dms)}"}), 500
+        return jsonify({"error": f"Forecast generation error: {str(e_pred_profile)}"}), 500
 
-    if dms_predictions_series_utc.empty:
+    if predictions_series_utc.empty:
         return jsonify({"error": "Forecast generation resulted in no prediction data."}), 500
 
-    # --- Prepare data for the chart ---
-    # 1. Historical data for display
     history_labels_display = []
     history_data_display = []
     if not history_for_display_utc.empty:
         history_display_local = history_for_display_utc.tz_convert(APP_DISPLAY_TIMEZONE)
         history_labels_display = [dt.strftime('%Y-%m-%d %H:%M') for dt in history_display_local.index]
-        history_data_display = [round(val, 2) if pd.notna(val) else None for val in history_display_local[DMS_TARGET_COL_DATAFRAME].values]
+        history_data_display = history_display_local[DMS_TARGET_COL_DATAFRAME].round(2).fillna(np.nan).replace([np.nan], [None]).tolist()
 
-    # 2. Forecast data for display
     forecast_labels_display = []
     forecast_data_display = []
-    if not dms_predictions_series_utc.empty:
-        predictions_display_local = dms_predictions_series_utc.tz_convert(APP_DISPLAY_TIMEZONE)
+    if not predictions_series_utc.empty:
+        predictions_display_local = predictions_series_utc.tz_convert(APP_DISPLAY_TIMEZONE)
         forecast_labels_display = [dt.strftime('%Y-%m-%d %H:%M') for dt in predictions_display_local.index]
-        forecast_data_display = [round(p_val, 2) if pd.notna(p_val) else None for p_val in predictions_display_local.values]
+        forecast_data_display = predictions_display_local.round(2).fillna(np.nan).replace([np.nan], [None]).tolist()
 
     return jsonify({
         "history_labels": history_labels_display,
@@ -462,7 +450,8 @@ def run_forecast_dms_api():
         "forecast_data": forecast_data_display   
     })
 
-
+# --- The rest of the file (manual retrain, performance evaluation) is also updated to call the new algo functions ---
+# ... (The logic is nearly identical, just swapping `predict_dms` for `predict_profile`) ...
 @app.route('/trigger_manual_retrain', methods=['POST'])
 def trigger_manual_retrain_route():
     global retraining_active, retraining_status_message, retraining_status_category 
@@ -496,15 +485,12 @@ def calculate_model_performance_api():
 
     print(f"Calculating model performance for the last {eval_period_days} days ({eval_period_hours} hours).")
 
-    # 1. Fetch data: `eval_period_hours` for actuals + `MAX_LAG_HOURS` for history features
-    required_total_data_points = eval_period_hours + MAX_LAG_HOURS + 5 # +5 buffer
+    required_total_data_points = eval_period_hours + MAX_LAG_HOURS + 5
     all_db_readings_query = HourlyReading.query.order_by(HourlyReading.timestamp_utc.desc()).limit(required_total_data_points).all()
     
     if len(all_db_readings_query) < required_total_data_points:
-        return jsonify({"error": f"Not enough data in DB for {eval_period_days}-day evaluation. "
-                                 f"Need {required_total_data_points} hourly records, found {len(all_db_readings_query)}."}), 400
+        return jsonify({"error": f"Not enough data in DB for {eval_period_days}-day evaluation."}), 400
 
-    # Convert to DataFrame (oldest first for processing, UTC index)
     db_data_list_eval = []
     for r_eval in all_db_readings_query:
         db_data_list_eval.append({
@@ -514,30 +500,23 @@ def calculate_model_performance_api():
         })
     full_eval_period_df_utc = pd.DataFrame(db_data_list_eval).set_index('DateTime').iloc[::-1].sort_index()
 
-    # 2. Split into history (for prediction input) and actuals (for comparison)
-    # The 'actuals' part is the most recent `eval_period_hours` of data.
-    # The 'history' part is the data immediately preceding these actuals, used for lag features.
     actuals_for_evaluation_df = full_eval_period_df_utc.tail(eval_period_hours).copy()
-    history_end_time_for_pred = actuals_for_evaluation_df.index[0] - pd.Timedelta(hours=1)
-    history_for_prediction_input = full_eval_period_df_utc.loc[full_eval_period_df_utc.index <= history_end_time_for_pred].tail(MAX_LAG_HOURS + 5).copy() #Sufficient history for lags
+    history_for_prediction_input = full_eval_period_df_utc.loc[full_eval_period_df_utc.index < actuals_for_evaluation_df.index[0]].copy()
     
     if history_for_prediction_input.empty or len(actuals_for_evaluation_df) != eval_period_hours :
-         return jsonify({"error": f"Data splitting error for performance evaluation. "
-                                  f"Actuals length: {len(actuals_for_evaluation_df)}, Expected: {eval_period_hours}"}), 500
+         return jsonify({"error": f"Data splitting error for performance evaluation."}), 500
 
     actuals_series_for_metrics = actuals_for_evaluation_df[DMS_TARGET_COL_DATAFRAME]
-
-    # 3. Get future exogenous variables for the evaluation period (these are the *actual* temperatures during that period)
     future_exog_for_eval_period = actuals_for_evaluation_df[['temperature']].copy() if 'temperature' in DMS_FEATURES_LIST else None
 
-    # 4. Generate DMS predictions for this evaluation period
     try:
-        predictions_for_eval_series = algo.predict_dms(
-            history_df=history_for_prediction_input, # The history right before the actuals start
+        # --- MODIFIED: Call the new profile prediction function ---
+        predictions_for_eval_series = algo.predict_profile(
+            history_df=history_for_prediction_input,
             max_horizon_hours=eval_period_hours,
             features_list=DMS_FEATURES_LIST,
             target_col=DMS_TARGET_COL_DATAFRAME,
-            future_exog_series=future_exog_for_eval_period # Actual temperatures for the eval period
+            future_exog_series=future_exog_for_eval_period
         )
     except Exception as e_eval_pred:
         print(f"Error during performance evaluation prediction: {e_eval_pred}")
@@ -547,7 +526,6 @@ def calculate_model_performance_api():
     if predictions_for_eval_series.empty:
         return jsonify({"error": "Performance evaluation: Prediction generation resulted in no data."}), 500
 
-    # 5. Calculate metrics (ensure alignment before calculation)
     comparison_df_eval = pd.DataFrame({'Actual': actuals_series_for_metrics, 'Forecast': predictions_for_eval_series}).dropna()
     if comparison_df_eval.empty:
         return jsonify({"error": "No overlapping data between actuals and forecast for performance metrics calculation."}), 500
@@ -558,21 +536,24 @@ def calculate_model_performance_api():
     metrics_results = {}
     metrics_results['rmse'] = np.sqrt(np.mean((actuals_aligned_eval - forecast_aligned_eval)**2))
     metrics_results['mae'] = np.mean(np.abs(actuals_aligned_eval - forecast_aligned_eval))
-    # MAPE calculation robust to zeros in actuals
     valid_actuals_for_mape = actuals_aligned_eval[actuals_aligned_eval != 0]
     if not valid_actuals_for_mape.empty:
         metrics_results['mape'] = np.mean(np.abs((valid_actuals_for_mape - forecast_aligned_eval.loc[valid_actuals_for_mape.index]) / valid_actuals_for_mape)) * 100
     else:
-        metrics_results['mape'] = float('inf') # Or 'N/A' if all actuals are zero
+        metrics_results['mape'] = float('inf')
     
     actuals_display_local = actuals_series_for_metrics.tz_convert(APP_DISPLAY_TIMEZONE)
     predictions_display_local = predictions_for_eval_series.tz_convert(APP_DISPLAY_TIMEZONE)
 
     chart_labels_eval = [dt_loc.strftime('%Y-%m-%d %H:%M') for dt_loc in actuals_display_local.index]
-    chart_actual_data_eval = [round(val, 2) if pd.notna(val) else None for val in actuals_display_local.values]
-    # Ensure forecast data aligns with actuals' index for the chart
-    chart_forecast_data_eval = [round(predictions_display_local.get(dt_idx_loc), 2) if pd.notna(predictions_display_local.get(dt_idx_loc)) else None for dt_idx_loc in actuals_display_local.index]
 
+    # --- FIX APPLIED HERE ---
+    # Use .tolist() for chart data to ensure JSON compatibility
+    chart_actual_data_eval = actuals_display_local.round(2).fillna(np.nan).replace([np.nan], [None]).tolist()
+    
+    # Align forecast data to the same index as actuals before converting
+    aligned_forecast_for_chart = predictions_display_local.reindex(actuals_display_local.index)
+    chart_forecast_data_eval = aligned_forecast_for_chart.round(2).fillna(np.nan).replace([np.nan], [None]).tolist()
 
     return jsonify({
         "metrics": {k: round(v, 2) if isinstance(v, (float, np.floating)) and pd.notna(v) else (v if pd.notna(v) else 'N/A') for k, v in metrics_results.items()},
@@ -586,21 +567,17 @@ def calculate_model_performance_api():
         "eval_end_time_display": actuals_display_local.index[-1].strftime('%Y-%m-%d %H:%M %Z')
     })
 
-# --- Main Execution ---
+
 if __name__ == "__main__":
     with app.app_context():
-        db.create_all() # Ensure tables are created
+        db.create_all()
         print(f"Database '{DATABASE_FILE}' ensured/created.")
 
-    # Start background threads
-    data_collector_thread = threading.Thread(target=background_data_collector, daemon=True)
-    data_collector_thread.start()
+    if FETCH_ENABLED:
+        data_collector_thread = threading.Thread(target=background_data_collector, daemon=True)
+        data_collector_thread.start()
 
     retraining_scheduler_thread = threading.Thread(target=background_retraining_scheduler, daemon=True)
     retraining_scheduler_thread.start()
-
-    # For production, use a proper WSGI server like Gunicorn or uWSGI
-    # threaded=True is okay for development with background tasks
-    # use_reloader=False is important when using threads to avoid issues with the reloader
-        #    ngrok http --url=sincere-moccasin-likely.ngrok-free.app 5000
+    
     app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False, threaded=True)
