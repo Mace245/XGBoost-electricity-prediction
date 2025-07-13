@@ -1,13 +1,19 @@
 import pandas as pd
+import numpy as np
 import xgboost as xgb
-import pickle as pkl # For loading the scaler
-
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_absolute_percentage_error
+import matplotlib.pylab as plt
+import warnings
 import openmeteo_requests
 import requests_cache
 from retry_requests import retry
-from sklearn.preprocessing import MinMaxScaler
-import matplotlib.pylab as plt
-from scipy.interpolate import interp1d
+
+# --- 0. SETUP ---
+# Suppress warnings for cleaner output
+warnings.filterwarnings('ignore', category=FutureWarning)
+
+# --- 1. DATA FETCHING AND PREPARATION FUNCTIONS ---
 
 def prepare_data(electricity_data:pd.DataFrame, temperature_data:pd.DataFrame):
     merged_data = electricity_data.merge(temperature_data, how='left', left_index=True, right_index=True)
@@ -53,8 +59,8 @@ def temp_fetch(start_date, end_date, latitude:float, longitude:float, historical
 	print(f"End Date: {end_date}")
 	return hourly_dataframe
 
-def fetch_elec_temp():
-    electricity_data = pd.read_csv('test.csv', parse_dates=['DateTime'])
+def fetch_elec_temp(filepath):
+    electricity_data = pd.read_csv(filepath, parse_dates=['DateTime'])
     electricity_data.set_index('DateTime', inplace=True)
     # electricity_data = electricity_data.drop(columns='Global_active_power')
     
@@ -76,81 +82,123 @@ def fetch_elec_temp():
     
     return electricity_data, temperature_data
 
-print("Loading model and scaler...")
-# Load the model that was trained on scaled data
-loaded_model = xgb.XGBRegressor()
-loaded_model.load_model('final_xgboost_model.ubj')
-
-# Load the scaler that was fitted on the Malaysian training features
-file = open('scaler_x.pkl', 'rb')
-scaler_X = pkl.load(file)
-file.close()
-
-def create_features(df):
-    df['date'] = df.index
-    df['hour'] = df['date'].dt.hour
-    df['dayofweek'] = df['date'].dt.dayofweek
-    df['quarter'] = df['date'].dt.quarter
-    df['month'] = df['date'].dt.month
-    df['year'] = df['date'].dt.year
-    df['dayofyear'] = df['date'].dt.dayofyear
-    df['dayofmonth'] = df['date'].dt.day
-    df['weekofyear'] = df['date'].dt.isocalendar().week
-    df['temperature'] = df['temperature']
-    # df['wh_lag_24h'] = df['Wh'].shift(24)
-    # df['wh_lag_72h'] = df['Wh'].shift(72)
-    # df['wh_lag_168h'] = df['Wh'].shift(168)
-
-    return df
-
-electricity_raw, temperature_raw = fetch_elec_temp()
+electricity_raw, temperature_raw = fetch_elec_temp('test.csv')
 merged_data_complete = prepare_data(electricity_raw, temperature_raw)
-merged_data_complete = merged_data_complete.tz_convert('Asia/Jakarta')
+test_df = merged_data_complete.tz_convert('Asia/Jakarta')
 
-# min_actual_wh = merged_data_complete['Wh'].min()
-# max_actual_wh = merged_data_complete['Wh'].max()
-# print(min_actual_wh, max_actual_wh)
+electricity_raw, temperature_raw = fetch_elec_temp('test2.csv')
+merged_data_complete = prepare_data(electricity_raw, temperature_raw)
+test2_df = merged_data_complete.tz_convert('Asia/Jakarta')
 
-X_test = create_features(merged_data_complete)
-X_test = X_test.drop(columns=['Wh', 'date'])
-X_test['temperature'] = X_test.pop('temperature')
+# --- 2. FEATURE ENGINEERING FUNCTION ---
+def create_features(df, label=None):
+    """Creates time series features from a datetime index."""
+    df['hour'] = df.index.hour
+    df['dayofweek'] = df.index.dayofweek
+    df['quarter'] = df.index.quarter
+    df['month'] = df.index.month
+    df['year'] = df.index.year
+    df['dayofyear'] = df.index.dayofyear
+    df['dayofmonth'] = df.index.day
+    df['weekofyear'] = df.index.isocalendar().week.astype(int)
+    
+    X = df[['hour','dayofweek','quarter','month','year',
+            'dayofyear','dayofmonth','weekofyear','temperature']]
+    
+    if label and label in df.columns:
+        y = df[label]
+        return X, y
+    return X
 
-features =  ['hour','dayofweek','quarter','month','year',
-            'dayofyear','dayofmonth','weekofyear', 'temperature',
-            # 'wh_lag_24h', 'wh_lag_72h', 'wh_lag_168h'
-            ]
+# --- 3. LOAD DATA AND CREATE FEATURES ---
+print("Loading and preparing data...")
+# Load initial training data for Building A
+from lib import data
 
-X_predict = X_test[features]
+electricity_raw, temperature_raw = data.fetch_elec_temp()
+building_a_df = data.prepare_data(electricity_raw, temperature_raw)
+# Load and prepare the data for Building B
+building_b_df = test_df
+building_b_eval_df = test2_df
 
-X_indonesia_scaled = scaler_X.transform(X_test)
+# Create feature sets for each building
+X_train_a, y_train_a = create_features(building_a_df, label='Wh')
+X_train_b, y_train_b = create_features(building_b_df, label='Wh')
+X_eval_b, y_eval_b = create_features(building_b_eval_df, label='Wh')
 
-predictions_normalized = loaded_model.predict(X_predict)
+# --- 4. SCALE DATA ---
+# Initialize and fit the scaler ONLY on the data from Building A
+scaler = MinMaxScaler()
+print("\nFitting scaler on Building A's data...")
+scaler.fit(X_train_a)
 
-# First, create a results dataframe
-results = pd.DataFrame({
-    'DateTime': merged_data_complete.index,
-    'Actual_Wh': merged_data_complete['Wh'],
-    'Prediction_Normalized': predictions_normalized
-}).set_index('DateTime')
-print(results)
+# Transform both datasets using the SAME scaler learned from Building A
+print("Transforming data for both buildings...")
+X_train_a_scaled = scaler.transform(X_train_a)
+X_train_b_scaled = scaler.transform(X_train_b)
+X_eval_b_scaled = scaler.transform(X_eval_b) 
 
-m = interp1d([1.91070775, 617.1704890666666],[60.0, 151.6])
-results['Prediction_Normalized'] = m(results['Prediction_Normalized'])
+# --- 5. STAGE 1: TRAIN THE BASE MODEL ON BUILDING A ---
+base_model = xgb.XGBRegressor(
+    objective='reg:squarederror', n_estimators=1000, learning_rate=0.01,
+    max_depth=7, colsample_bytree=1.0, subsample=0.1,
+    reg_alpha=5.0, reg_lambda=10.0, n_jobs=-1
+)
 
-# --- Step 3: Display the Resulting Table ---
+print("\n--- Stage 1: Training Base Model on Building A ---")
+base_model.fit(X_train_a_scaled, y_train_a, verbose=100)
 
-print("--- Predictions Mapped to Indonesian Data Scale ---")
-# We select the columns to show the clear before-and-after mapping
-print(results[['Actual_Wh', 'Prediction_Normalized']])
+# Save the base model
+base_model_path = 'building_a_base_model.ubj'
+print(f"\nSaving the base model to {base_model_path}...")
+base_model.save_model(base_model_path)
 
+# --- 6. STAGE 2: FINE-TUNE A NEW MODEL FOR BUILDING B ---
+print("\n--- Stage 2: Fine-tuning a new, specialized model for Building B ---")
+# Create a new model instance for Building B
+building_b_model = xgb.XGBRegressor()
+# Load the state of the base model as a starting point
+building_b_model.load_model(base_model_path) 
 
-# --- Step 4 (Optional): Plot the Mapped Data ---
-results[['Actual_Wh', 'Prediction_Normalized']].plot(figsize=(15,6), style=['-', '--'])
-plt.title('Comparing Actual vs. Mapped Predicted Usage')
-plt.ylabel('Usage (Wh)')
+# Continue training (fine-tuning) on Building B's data
+building_b_model.fit(
+    X_train_b_scaled, y_train_b,
+    verbose=100
+)
+
+# Save the final, specialized model for Building B
+final_model_path = 'building_b_specialized_model.ubj'
+print(f"\nSaving the specialized Building B model to {final_model_path}...")
+building_b_model.save_model(final_model_path)
+
+# --- 7. EVALUATE AND VISUALIZE THE SPECIALIZED BUILDING B MODEL ---
+print("\nLoading final model and making predictions on Building B data...")
+final_model = xgb.XGBRegressor()
+final_model.load_model(final_model_path)
+
+predictions = final_model.predict(X_eval_b_scaled)
+
+results_df = pd.DataFrame({'Actual': y_eval_b, 'Predicted': predictions}, index=y_eval_b.index)
+# print("\nFirst 5 predictions from the Building B model:")
+# print(results_df.head())
+
+mape_score = mean_absolute_percentage_error(y_eval_b, predictions)
+print(f"\nFinal Model MAPE on Building B Data: {mape_score * 100:.3f}%")
+
+# Plotting
+xgb.plot_importance(final_model, height=0.9, importance_type='gain')
+plt.title("Feature Importance (Specialized Building B Model)")
+plt.xlabel('Importance Score')
+plt.ylabel('Feature')
+plt.grid(False)
+plt.show()
+
+plt.figure(figsize=(15, 6))
+results_df['Actual'].plot(label='Actual Values', style='-')
+results_df['Predicted'].plot(label='Predictions', style='--')
+plt.title('Building B Model: Actual vs. Predicted')
+plt.xlabel('Date')
+plt.ylabel('Wh')
 plt.legend()
 plt.grid(True)
 plt.show()
-
-# The 'Predicted_Normalized_Usage' is your final result for the demo.
-# It represents the predicted usage pattern on a 0-1 scale, relative to the Malaysian data.

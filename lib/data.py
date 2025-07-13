@@ -76,10 +76,6 @@ from collections import namedtuple
 def get_all_data_from_db_for_training(db_session, energy_temp_reading_model, 
                                       output_df_target_col: str, output_df_temp_col: str,
                                       model_actual_target_attr: str, model_actual_temp_attr: str):
-    """
-    Fetches all data from the EnergyTempReading database and prepares it
-    into a pandas DataFrame suitable for training.
-    """
     print("Fetching all data from database for training...")
     all_readings_query = db_session.query(energy_temp_reading_model).order_by(energy_temp_reading_model.timestamp_utc).all()
 
@@ -127,12 +123,8 @@ def create_training_data(features:list[str], target:str):
     y = merged_data[target]
     return training_data(X=X, y=y)
 
-# --- MODIFIED: Removed obsolete DMS-specific functions ---
-# create_dms_training_data_for_horizon
-# create_dms_feature_set_for_prediction
 
 def visualize(model, features:list[str], actual_values:pd.Series, forecast_values:pd.Series, period_label:str):
-    """Visualizes the forecast against actual values for a specific period."""
     comparison_df = pd.DataFrame({'Actual': actual_values, 'Forecast': forecast_values}).dropna()
 
     if comparison_df.empty:
@@ -158,19 +150,15 @@ def visualize_dms_forecast(
     actual_values_series: pd.Series, 
     period_label: str,
 ):
-    """Generic visualization function, name kept for compatibility."""
-    # ... (function body is unchanged) ...
     comparison_df = pd.DataFrame({'Actual': actual_values_series, 'Forecast': dms_forecast_series}).dropna()
 
     actuals_aligned = comparison_df['Actual']
     forecast_aligned = comparison_df['Forecast']
 
-    # Calculate metrics
     mse = mean_squared_error(actuals_aligned, forecast_aligned)
     mae = mean_absolute_error(actuals_aligned, forecast_aligned)
     rmse = np.sqrt(mse)
     mape = np.mean(np.abs((actuals_aligned - forecast_aligned) / actuals_aligned)) * 100 if np.all(actuals_aligned != 0) else float('inf')
-
 
     print(f"\n--- Evaluation for: {period_label} ---")
     print(f"Mean Squared Error (MSE): {mse:.2f}")
@@ -178,14 +166,12 @@ def visualize_dms_forecast(
     print(f"Root Mean Squared Error (RMSE): {rmse:.2f}")
     print(f"Mean Absolute Percentage Error (MAPE): {mape:.2f}%")
 
-
-    # Visualize Forecast vs Actual
     plt.figure(figsize=(6, 3))
     plt.plot(actuals_aligned.index, actuals_aligned, label='Actual Values', marker='.', linestyle='-')
     plt.plot(forecast_aligned.index, forecast_aligned, label='DMS Forecast', marker='.', linestyle='--')
     plt.title(f"{period_label} Comparison\nRMSE: {rmse:.2f} | MAE: {mae:.2f} | MAPE: {mape:.2f}%")
     plt.xlabel("DateTime")
-    plt.ylabel("Wh") # Or your target variable name
+    plt.ylabel("Wh") 
     plt.legend()
     plt.grid(True, which='both', linestyle='--', linewidth=0.5)
     plt.tight_layout()

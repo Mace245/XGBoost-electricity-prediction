@@ -1,8 +1,6 @@
-# app.py
 import os
 import time
 import threading
-import pickle
 from datetime import datetime, timedelta, timezone as dt_timezone
 
 import pandas as pd
@@ -13,14 +11,13 @@ from antares_http import antares
 from lib import data 
 from lib import algo 
 
-# --- Configuration ---
 ANTARES_ACCESS_KEY = '5cd4cda046471a89:75f9e1c6b34bf41a'
 ANTARES_PROJECT_NAME = 'UjiCoba_TA'
 ANTARES_DEVICE_NAME = 'TA_DKT1'
+
 FETCH_ENABLED = False
 
-# --- MODIFIED: New DB name to avoid conflicts ---
-DATABASE_FILE = 'energy_app_dms_simplified.db'
+DATABASE_FILE = 'app.db'
 
 BACKGROUND_FETCH_INTERVAL_SECONDS = 360 * 60
 
@@ -29,18 +26,12 @@ LONGITUDE_CONFIG = 121.0
 APP_DISPLAY_TIMEZONE = "Asia/Kuala_Lumpur"
 MAX_FORECAST_HORIZON_APP = 24 * 7
 
-# Variable names kept for minimal changes, though "DMS" is no longer the method
-DMS_FEATURES_LIST = ['hour', 'day_of_week', 'day_of_month', 'is_weekend',
-                     'lag_1', 'lag_24', 'lag_72', 'lag_168', 'temperature']
-DMS_TARGET_COL_DATAFRAME = 'Wh'    
+DMS_FEATURES_LIST = ['hour', 'day_of_week', 'day_of_month', 'temperature']
+DMS_TARGET_COL_DATAFRAME = 'kWh'    
 DB_TARGET_COL_NAME = 'EnergyWh'
 DB_TEMP_COL_NAME = 'TemperatureCelsius' 
 
 MAX_LAG_HOURS = 0
-for f_name in DMS_FEATURES_LIST:
-    if f_name.startswith("lag_"):
-        try: MAX_LAG_HOURS = max(MAX_LAG_HOURS, int(f_name.split("_")[1]))
-        except: pass
 
 RETRAIN_CHECK_INTERVAL_SECONDS = 3600 * 6
 RETRAIN_TRIGGER_DAY = 6 
@@ -69,10 +60,7 @@ class HourlyReading(db.Model):
     def __repr__(self):
         return f"<HourlyReading {self.timestamp_utc} - Energy: {self.EnergyWh}>"
 
-# --- The rest of the background_data_collector function is unchanged ---
-# ... (background_data_collector code is identical to previous versions) ...
 def background_data_collector():
-    """Periodically fetches data for the CURRENT hour from Antares and temperature forecast."""
     global last_fetched_hour_utc
     print("Simplified Background Data Collector started (no catch-up)...")
 
@@ -114,20 +102,17 @@ def background_data_collector():
                     latest_antares_data = antares.get(ANTARES_PROJECT_NAME, ANTARES_DEVICE_NAME)
                     if latest_antares_data and 'content' in latest_antares_data:
                         new_energy_wh_value = latest_antares_data['content'].get('Energy')
-                except Exception as e_ant_update:
-                    print(f"  Error fetching Antares for update check on {target_hour_iso}: {e_ant_update}")
+                except:
+                    print(f"  Error fetching Antares for update check on {target_hour_iso}")
 
                 commit_update_needed = False
                 if new_energy_wh_value is not None: 
-                    try:
-                        new_energy_wh_value_float = float(new_energy_wh_value) 
-                        if existing_reading_for_target_hour.EnergyWh is None or \
-                           new_energy_wh_value_float > existing_reading_for_target_hour.EnergyWh: 
-                            print(f"  Updating Energy for {target_hour_iso}. Stored: {existing_reading_for_target_hour.EnergyWh}, New: {new_energy_wh_value_float}")
-                            existing_reading_for_target_hour.EnergyWh = new_energy_wh_value_float
-                            commit_update_needed = True
-                    except (ValueError, TypeError) as e_conv:
-                         print(f"  Antares energy value '{new_energy_wh_value}' for update check on {target_hour_iso} is not a valid number: {e_conv}")
+                    new_energy_wh_value_float = float(new_energy_wh_value) 
+                    if existing_reading_for_target_hour.EnergyWh is None or \
+                        new_energy_wh_value_float > existing_reading_for_target_hour.EnergyWh: 
+                        print(f"  Updating Energy for {target_hour_iso}. Stored: {existing_reading_for_target_hour.EnergyWh}, New: {new_energy_wh_value_float}")
+                        existing_reading_for_target_hour.EnergyWh = new_energy_wh_value_float
+                        commit_update_needed = True
 
                 if existing_reading_for_target_hour.TemperatureCelsius is None:
                     print(f"  Temperature for {target_hour_iso} was NULL, attempting to fetch and update.")
@@ -210,22 +195,21 @@ def background_data_collector():
 
             try:
                 db.session.commit()
-                energy_print_val = f"{new_entry.EnergyWh:.2f}" if new_entry.EnergyWh is not None else "N/A"
-                temp_print_val = f"{new_entry.TemperatureCelsius:.2f}" if new_entry.TemperatureCelsius is not None else "N/A"
+                energy_print_val = f"{new_entry.EnergyWh:.2f}"
+                temp_print_val = f"{new_entry.TemperatureCelsius:.2f}" 
                 print(f"  Stored new record: {new_entry.timestamp_utc} - Energy: {energy_print_val}, Temp: {temp_print_val}")
-                last_fetched_hour_utc = target_hour_to_process_utc # Successfully stored and processed
+                last_fetched_hour_utc = target_hour_to_process_utc
             except Exception as e_db_commit:
                 db.session.rollback()
-                energy_val_on_fail = new_entry.EnergyWh if hasattr(new_entry, 'EnergyWh') else 'UNKNOWN_ENERGY'
-                temp_val_on_fail = new_entry.TemperatureCelsius if hasattr(new_entry, 'TemperatureCelsius') else 'UNKNOWN_TEMP'
+                energy_val_on_fail = new_entry.EnergyWh 
+                temp_val_on_fail = new_entry.TemperatureCelsius 
 
                 print(f"  DB Commit Error for new record {target_hour_iso}: {e_db_commit}.")
                 print(f"    Attempted to store: Energy={repr(energy_val_on_fail)}, Temp={repr(temp_val_on_fail)}")
         
         time.sleep(BACKGROUND_FETCH_INTERVAL_SECONDS)
 
-def schedule_dms_retraining(): # Name kept for minimal changes
-    """Initiates the Profile model retraining process."""
+def schedule_dms_retraining():
     global retraining_active, last_retrain_completed_utc
     with retraining_status_lock:
         if retraining_active:
@@ -233,12 +217,6 @@ def schedule_dms_retraining(): # Name kept for minimal changes
             return
         retraining_active = True
     print("\n--- INITIATING PROFILE MODEL RETRAINING ---")
-    current_status_msg = "Retraining in progress..."
-    current_status_cat = "info"
-
-    with retraining_status_lock:
-        retraining_status_message = current_status_msg
-        retraining_status_category = current_status_cat
     
     try:
         with app.app_context(): 
@@ -254,14 +232,10 @@ def schedule_dms_retraining(): # Name kept for minimal changes
                 msg = (f"  Insufficient data for retraining ({len(training_df_utc)} records). "
                        f"Need > {MAX_LAG_HOURS + 24}. Retraining aborted.")
                 print(msg)
-                with retraining_status_lock:
-                    retraining_status_message = msg
-                    retraining_status_category = "warning"
                 return 
 
             print(f"  Retraining profile model with {len(training_df_utc)} data points.")
             
-            # --- MODIFIED: Call the new single profile training function ---
             algo.train_profile_model(
                 base_data_for_training=training_df_utc,
                 features_list=DMS_FEATURES_LIST,
@@ -269,26 +243,16 @@ def schedule_dms_retraining(): # Name kept for minimal changes
             )
             
             last_retrain_completed_utc = datetime.now(dt_timezone.utc)
-            success_msg = f"Profile model successfully retrained at {last_retrain_completed_utc.isoformat()}."
-            print(f"--- {success_msg} ---")
-            with retraining_status_lock:
-                retraining_status_message = success_msg
-                retraining_status_category = "success"
 
     except Exception as e:
-        error_msg = f"Error during model retraining: {e}"
         print(f"--- FATAL ERROR DURING PROFILE MODEL RETRAINING: {e} ---")
         import traceback; traceback.print_exc()
-        with retraining_status_lock:
-            retraining_status_message = error_msg
-            retraining_status_category = "danger" 
     finally:
         with retraining_status_lock: 
             retraining_active = False
-        print("--- Retraining attempt finished. retraining_active set to False. ---")
+        print("--- Retraining finished ---")
 
 def background_retraining_scheduler():
-    """Checks periodically if it's time to retrain models."""
     print("Background Retraining Scheduler started...")
     global last_retrain_completed_utc 
     while True:
@@ -298,13 +262,11 @@ def background_retraining_scheduler():
             (now_utc - last_retrain_completed_utc).days >= 7):
             print(f"Retraining condition met (Day: {now_utc.weekday()}, Hour: {now_utc.hour} UTC). Last: {last_retrain_completed_utc.date()}")
             
-            # Name `schedule_dms_retraining` is kept, but it calls the new logic
             retrain_job_thread = threading.Thread(target=schedule_dms_retraining)
             retrain_job_thread.start() 
         time.sleep(RETRAIN_CHECK_INTERVAL_SECONDS)
 
 
-# --- Flask Routes (unchanged except for the algo.predict call) ---
 @app.route('/')
 def home():
     return redirect(url_for('forecast_view'))
@@ -353,7 +315,7 @@ def forecast_view():
                            retraining_message=current_retraining_msg,
                            retraining_category=current_retraining_cat)
 
-@app.route('/run_forecast_dms', methods=['POST']) # Route name kept for minimal changes
+@app.route('/run_forecast_dms', methods=['POST'])
 def run_forecast_dms_api():
     req_data = request.get_json()
     timeframe_selected_str = req_data.get('timeframe')
@@ -450,8 +412,7 @@ def run_forecast_dms_api():
         "forecast_data": forecast_data_display   
     })
 
-# --- The rest of the file (manual retrain, performance evaluation) is also updated to call the new algo functions ---
-# ... (The logic is nearly identical, just swapping `predict_dms` for `predict_profile`) ...
+
 @app.route('/trigger_manual_retrain', methods=['POST'])
 def trigger_manual_retrain_route():
     global retraining_active, retraining_status_message, retraining_status_category 
@@ -510,7 +471,6 @@ def calculate_model_performance_api():
     future_exog_for_eval_period = actuals_for_evaluation_df[['temperature']].copy() if 'temperature' in DMS_FEATURES_LIST else None
 
     try:
-        # --- MODIFIED: Call the new profile prediction function ---
         predictions_for_eval_series = algo.predict_profile(
             history_df=history_for_prediction_input,
             max_horizon_hours=eval_period_hours,
@@ -547,11 +507,8 @@ def calculate_model_performance_api():
 
     chart_labels_eval = [dt_loc.strftime('%Y-%m-%d %H:%M') for dt_loc in actuals_display_local.index]
 
-    # --- FIX APPLIED HERE ---
-    # Use .tolist() for chart data to ensure JSON compatibility
     chart_actual_data_eval = actuals_display_local.round(2).fillna(np.nan).replace([np.nan], [None]).tolist()
     
-    # Align forecast data to the same index as actuals before converting
     aligned_forecast_for_chart = predictions_display_local.reindex(actuals_display_local.index)
     chart_forecast_data_eval = aligned_forecast_for_chart.round(2).fillna(np.nan).replace([np.nan], [None]).tolist()
 

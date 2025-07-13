@@ -40,8 +40,10 @@ def create_features(df, label=None):
     df['wh_lag_168h'] = df['Wh'].shift(168)
     
     X = df[['hour','dayofweek','quarter','month','year',
-            'dayofyear','dayofmonth','weekofyear', 'temperature',
-            'wh_lag_24h', 'wh_lag_72h', 'wh_lag_168h']]
+            'dayofyear','dayofmonth','weekofyear',
+            'temperature',
+            'wh_lag_24h', 'wh_lag_72h', 'wh_lag_168h'
+            ]]
     if label:
         y = df[label]
         return X, y
@@ -81,8 +83,13 @@ predictions = loaded_model.predict(X_test)
 mape_score = mean_absolute_percentage_error(y_test, predictions)
 print(f"Final Model MAPE on Test Set: {mape_score * 100:.3f}%")
 
-plot_importance(model, height=0.9)
-plt.title("Feature Importance")
+plot_importance(model, height=0.9, importance_type='gain')
+plt.title("Kepentingan Fitur")
+plt.rcParams.update({'font.size': 20})
+plt.xlabel('Skor Kepentingan')
+plt.ylabel('Fitur')
+plt.grid(False)
+plt.savefig('importance w temp',bbox_inches='tight')
 plt.show()
 
 test_data['Wh_pred'] = predictions
