@@ -118,8 +118,22 @@ from lib import data
 electricity_raw, temperature_raw = data.fetch_elec_temp()
 building_a_df = data.prepare_data(electricity_raw, temperature_raw)
 # Load and prepare the data for Building B
-building_b_df = test_df
-building_b_eval_df = test2_df
+print("\nLoading and splitting data for Building B from 'test.csv'...")
+electricity_raw_b, temperature_raw_b = fetch_elec_temp('test.csv')
+full_building_b_df = prepare_data(electricity_raw_b, temperature_raw_b)
+full_building_b_df = full_building_b_df.tz_convert('Asia/Jakarta')
+
+# Get the unique dates and split them
+unique_dates = full_building_b_df.index.normalize().unique()
+train_dates = unique_dates[:4]
+eval_date = unique_dates[4]
+
+# Create the training and evaluation sets for Building B
+building_b_df = full_building_b_df[full_building_b_df.index.normalize().isin(train_dates)]
+building_b_eval_df = full_building_b_df[full_building_b_df.index.normalize() == eval_date]
+
+print(f"Building B Training Data: {len(building_b_df)} rows from {train_dates.min().date()} to {train_dates.max().date()}")
+print(f"Building B Evaluation Data: {len(building_b_eval_df)} rows for {eval_date.date()}")
 
 # Create feature sets for each building
 X_train_a, y_train_a = create_features(building_a_df, label='Wh')
@@ -191,14 +205,16 @@ plt.title("Feature Importance (Specialized Building B Model)")
 plt.xlabel('Importance Score')
 plt.ylabel('Feature')
 plt.grid(False)
+plt.savefig('indo_feature_importance.png')
 plt.show()
 
 plt.figure(figsize=(15, 6))
-results_df['Actual'].plot(label='Actual Values', style='-')
-results_df['Predicted'].plot(label='Predictions', style='--')
+results_df['Actual'].plot(label='Aktual', style='-')
+results_df['Predicted'].plot(label='Prediksi', style='--')
 plt.title('Building B Model: Actual vs. Predicted')
 plt.xlabel('Date')
 plt.ylabel('Wh')
 plt.legend()
 plt.grid(True)
+plt.savefig('indo_actual_vs_predicted.png')
 plt.show()
