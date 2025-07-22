@@ -174,15 +174,6 @@ def background_data_collector():
             try:
                 date_str_utc = target_hour_to_process_utc.strftime('%Y-%m-%d')
                 temp_df = data.temp_fetch(date_str_utc, date_str_utc, LATITUDE_CONFIG, LONGITUDE_CONFIG, historical=False)
-                if temp_df is not None and 'temperature' in temp_df:
-                    temp_series = temp_df['temperature']
-                    raw_temp = temp_series.get(target_hour_to_process_utc) 
-                    if pd.notna(raw_temp): # Check if it's a valid number (not NaN)
-                        temperature_value_float = float(raw_temp)
-                    else:
-                        print(f"  Temperature for {target_hour_iso} from API was NaN/None.")
-                else:
-                    print(f"  Temperature data not available or in unexpected format from temp_fetch for {target_hour_iso}.")
             except Exception as e_temp:
                 print(f"  Error fetching/processing temperature for {target_hour_iso}: {e_temp}")
 
