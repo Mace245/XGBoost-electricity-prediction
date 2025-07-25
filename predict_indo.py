@@ -8,6 +8,7 @@ import warnings
 import openmeteo_requests
 import requests_cache
 from retry_requests import retry
+from apscheduler.schedulers.background import BackgroundScheduler
 
 # --- 0. SETUP ---
 # Suppress warnings for cleaner output

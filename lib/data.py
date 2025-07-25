@@ -77,7 +77,7 @@ def get_all_data_from_db_for_training(db_session, energy_temp_reading_model,
                                       output_df_target_col: str, output_df_temp_col: str,
                                       model_actual_target_attr: str, model_actual_temp_attr: str):
     print("Fetching all data from database for training...")
-    all_readings_query = db_session.query(energy_temp_reading_model).order_by(energy_temp_reading_model.timestamp_utc).all()
+    all_readings_query = db_session.query(energy_temp_reading_model).order_by(energy_temp_reading_model.timestamp).all()
 
     if not all_readings_query:
         print("No data in the database to train on.")
@@ -86,7 +86,7 @@ def get_all_data_from_db_for_training(db_session, energy_temp_reading_model,
     df_data = []
     for r in all_readings_query:
         df_data.append({
-            'DateTime': pd.to_datetime(r.timestamp_utc, utc=True),
+            'DateTime': pd.to_datetime(r.timestamp),
             output_df_target_col: getattr(r, model_actual_target_attr, None),
             output_df_temp_col: getattr(r, model_actual_temp_attr, None)
         })

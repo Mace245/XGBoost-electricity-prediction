@@ -5,7 +5,7 @@ import time
 from apscheduler.schedulers.background import BackgroundScheduler
 import os
 
-get_data = False
+LOCK_FILE = "job.lock"
 
 schedule = {
     # Hour: {"lamp": status, "fan": status, "ac": status, "disp": status}
@@ -43,6 +43,9 @@ antares.setAccessKey('fe5c7a15d8c13220:bfd764392a99a094')
 
 def job_function():
     print(f"Hello World, the time is {datetime.now()}")
+    if os.path.exists(LOCK_FILE):
+        print(f"[{datetime.now()}] Job skipped: A previous job is still running.")
+        return
 
     # current_hour = datetime.now().hour
     # current_statuses = schedule.get(current_hour)
@@ -84,6 +87,8 @@ def job_function():
     while(True):
         latestData = antares.get('TADKT-1', 'PMM')
         try:
+            with open(LOCK_FILE, "w") as f:
+                f.write(str(os.getpid()))
             if latestData['content']['Voltage']:
                 energy_data = {
                     'DateTime': [datetime.strptime(latestData['last_modified_time'], '%Y%m%dT%H%M%S')],

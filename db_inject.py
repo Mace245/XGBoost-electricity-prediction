@@ -58,7 +58,7 @@ def fetch_temperature_for_date_range(start_date_utc_str: str, end_date_utc_str: 
 
 
 # --- General Configuration ---
-DATABASE_FILE = 'energy_app_dms_simplified.db'
+DATABASE_FILE = 'app.db'
 TABLE_NAME = 'hourly_reading'
 DB_STORAGE_TIMEZONE_STR = 'UTC'
 
@@ -77,10 +77,11 @@ def create_connection(db_file):
     return conn
 
 def create_table_if_not_exists(conn):
+    # Change 'timestamp_utc' to 'timestamp' in this SQL command
     sql_create_table = f"""
     CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp_utc TEXT NOT NULL UNIQUE,
+        timestamp TEXT NOT NULL UNIQUE,
         EnergyWh REAL,
         TemperatureCelsius REAL
     );
@@ -89,24 +90,27 @@ def create_table_if_not_exists(conn):
         cursor = conn.cursor()
         cursor.execute(sql_create_table)
         conn.commit()
-        print(f"Table '{TABLE_NAME}' ensured/created.")
+        print(f"Table '{TABLE_NAME}' ensured/created with 'timestamp' column.")
     except sqlite3.Error as e:
         print(f"Error creating table: {e}")
 
-def insert_reading(conn, timestamp_utc_iso_str, energy, temperature):
+def insert_reading(conn, timestamp, energy, temperature):
+    # Change 'timestamp_utc' to 'timestamp' in this SQL command
     sql_insert = f"""
-    INSERT INTO {TABLE_NAME} (timestamp_utc, EnergyWh, TemperatureCelsius)
+    INSERT INTO {TABLE_NAME} (timestamp, EnergyWh, TemperatureCelsius)
     VALUES (?, ?, ?);
     """
     cursor = conn.cursor()
     try:
-        cursor.execute(sql_insert, (timestamp_utc_iso_str, energy, temperature))
+        # Pass the new 'timestamp' variable here
+        cursor.execute(sql_insert, (timestamp, energy, temperature))
         return True
-    except sqlite3.IntegrityError: # Handles UNIQUE constraint violation for timestamp_utc
+    except sqlite3.IntegrityError:
         return False
     except sqlite3.Error as e:
-        print(f"  Error inserting data for {timestamp_utc_iso_str}: {e}")
+        print(f"  Error inserting data for {timestamp}: {e}")
         return False
+
 
 def inject_data_from_csv_with_temp_prefetch(csv_filepath):
     conn = create_connection(DATABASE_FILE)
@@ -114,41 +118,53 @@ def inject_data_from_csv_with_temp_prefetch(csv_filepath):
 
     create_table_if_not_exists(conn)
     added_count, skipped_count, processed_rows, current_batch_count = 0, 0, 0, 0
-    batch_size = 1000000 # Commit in larger batches
+    batch_size = 1000000
 
     try:
-        # --- Step 1: Read CSV and determine date range for temperature prefetch ---
+        # Step 1: Read CSV to determine date range
         print(f"Reading CSV to determine date range: {csv_filepath}")
         all_csv_datetimes_utc = []
-        # First pass to get all datetimes and find min/max
         temp_df_for_dates = pd.read_csv(csv_filepath, usecols=[CSV_COL_DATETIME], encoding='utf-8-sig')
         if temp_df_for_dates.empty:
-            print("CSV appears to be empty or has no DateTime column. Exiting.")
+            print("CSV is empty. Exiting.")
             conn.close(); return
 
         for dt_str_from_csv in temp_df_for_dates[CSV_COL_DATETIME]:
             try:
                 dt_naive_or_aware = pd.to_datetime(dt_str_from_csv)
-                if dt_naive_or_aware.tzinfo is None or dt_naive_or_aware.tzinfo.utcoffset(dt_naive_or_aware) is None:
-                    dt_localized = dt_naive_or_aware.tz_localize(CSV_DATETIME_INPUT_TIMEZONE, ambiguous='raise', nonexistent='raise')
-                else:
-                    dt_localized = dt_naive_or_aware
+                dt_localized = dt_naive_or_aware.tz_localize(CSV_DATETIME_INPUT_TIMEZONE) if dt_naive_or_aware.tzinfo is None else dt_naive_or_aware
                 all_csv_datetimes_utc.append(dt_localized.tz_convert(DB_STORAGE_TIMEZONE_STR))
             except Exception as e_date_parse:
-                print(f"  Warning: Could not parse DateTime '{dt_str_from_csv}' during range finding. Skipping this for range. Error: {e_date_parse}")
+                print(f"  Warning: Could not parse DateTime '{dt_str_from_csv}'. Skipping. Error: {e_date_parse}")
                 continue
         
         if not all_csv_datetimes_utc:
-            print("No valid DateTimes found in CSV to determine temperature fetch range. Exiting.")
+            print("No valid DateTimes found in CSV. Exiting.")
             conn.close(); return
 
-        min_date_utc = min(all_csv_datetimes_utc).normalize() # Start of day
-        max_date_utc = max(all_csv_datetimes_utc).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1) # End of day
+        # --- NEW LOGIC: Calculate the time offset using Jakarta Time ---
+        last_csv_time_utc = max(all_csv_datetimes_utc)
         
-        min_date_utc_str = min_date_utc.strftime('%Y-%m-%d')
-        max_date_utc_str = max_date_utc.strftime('%Y-%m-%d')
+        # 1. Define the target end time in Asia/Jakarta timezone
+        target_end_time_jakarta = pd.Timestamp("2025-07-23 23:00:00", tz='Asia/Jakarta')
+        
+        # 2. Convert target to UTC to correctly calculate the difference with our UTC data
+        target_end_time_utc = target_end_time_jakarta.tz_convert('UTC')
 
-        # --- Step 2: Prefetch all temperatures for the determined date range ---
+        time_offset = target_end_time_utc - last_csv_time_utc
+        print(f"\nTime Adjustment Calculated:")
+        print(f"  Last timestamp in CSV (UTC): {last_csv_time_utc}")
+        print(f"  Target end timestamp (Jakarta): {target_end_time_jakarta}")
+        print(f"  Applying offset of: {time_offset}")
+
+        # Adjust the min/max dates for the temperature API call
+        min_date_utc_adjusted = min(all_csv_datetimes_utc) + time_offset
+        max_date_utc_adjusted = last_csv_time_utc + time_offset
+        
+        min_date_utc_str = min_date_utc_adjusted.strftime('%Y-%m-%d')
+        max_date_utc_str = max_date_utc_adjusted.strftime('%Y-%m-%d')
+
+        # --- Step 2: Prefetch all temperatures for the NEW, adjusted date range ---
         prefetched_temps_utc = fetch_temperature_for_date_range(
             min_date_utc_str, max_date_utc_str, LATITUDE_CONFIG, LONGITUDE_CONFIG
         )
@@ -158,65 +174,45 @@ def inject_data_from_csv_with_temp_prefetch(csv_filepath):
             conn.close(); return
         if prefetched_temps_utc.empty:
             print("Warning: Prefetched temperature data is empty. Temperatures will be NULL.")
-            # Create an empty series with a DatetimeIndex to prevent KeyErrors later,
-            # though lookups will result in NaN -> None.
             prefetched_temps_utc = pd.Series(dtype=float, index=pd.to_datetime([]))
 
-
-        # --- Step 3: Process CSV again, this time inserting into DB with prefetched temps ---
-        print(f"\nProcessing CSV for database injection: {csv_filepath}")
+        # --- Step 3: Process CSV and insert into DB with adjusted timestamps ---
+        print(f"\nProcessing CSV for database injection...")
         with open(csv_filepath, mode='r', encoding='utf-8-sig') as csvfile:
             csv_reader = csv.DictReader(csvfile)
-            if not all(col in csv_reader.fieldnames for col in [CSV_COL_DATETIME, CSV_COL_ENERGY]):
-                print(f"Error: CSV missing required headers: '{CSV_COL_DATETIME}', '{CSV_COL_ENERGY}'")
-                conn.close(); return
+            # ... (header check remains the same) ...
 
             for row_num, row in enumerate(csv_reader, 1):
-                processed_rows += 1
-                dt_str_from_csv = row.get(CSV_COL_DATETIME)
-                energy_str = row.get(CSV_COL_ENERGY)
-
-                if not dt_str_from_csv or not energy_str:
-                    print(f"  Row {row_num}: Skipping. Missing DateTime or Energy. Data: {row}")
-                    skipped_count += 1; continue
-
+                # ... (error handling and parsing remains the same) ...
                 try:
-                    dt_naive_or_aware = pd.to_datetime(dt_str_from_csv)
-                    if dt_naive_or_aware.tzinfo is None or dt_naive_or_aware.tzinfo.utcoffset(dt_naive_or_aware) is None:
-                        dt_localized = dt_naive_or_aware.tz_localize(CSV_DATETIME_INPUT_TIMEZONE, ambiguous='raise', nonexistent='raise')
-                    else:
-                        dt_localized = dt_naive_or_aware
+                    dt_str_from_csv = row.get(CSV_COL_DATETIME)
+                    energy_str = row.get(CSV_COL_ENERGY)
                     
-                    dt_utc_for_lookup = dt_localized.tz_convert(DB_STORAGE_TIMEZONE_STR)
-                    dt_utc_for_lookup = dt_utc_for_lookup.replace(minute=0, second=0, microsecond=0) # Ensure it's on the hour for lookup
+                    dt_naive_or_aware = pd.to_datetime(dt_str_from_csv)
+                    dt_localized = dt_naive_or_aware.tz_localize(CSV_DATETIME_INPUT_TIMEZONE) if dt_naive_or_aware.tzinfo is None else dt_naive_or_aware
+                    dt_utc_original = dt_localized.tz_convert(DB_STORAGE_TIMEZONE_STR)
 
+                    # Apply the calculated offset to the timestamp
+                    dt_utc_adjusted = dt_utc_original + time_offset
+                    
+                    dt_utc_for_lookup = dt_utc_adjusted.replace(minute=0, second=0, microsecond=0)
                     db_timestamp_iso_str = dt_utc_for_lookup.isoformat()
 
-                    # --- Get Temperature from Prefetched Series ---
-                    temp_val = prefetched_temps_utc.get(dt_utc_for_lookup) # .get() returns None if key not found
-                    if pd.isna(temp_val): # Handle pandas NaN
+                    temp_val = prefetched_temps_utc.get(dt_utc_for_lookup)
+                    if pd.isna(temp_val):
                         temp_val = None
-                        print(f"  Row {row_num}: Temperature for {db_timestamp_iso_str} not found in prefetched data. Storing as NULL.")
-                    # else:
-                        # print(f"  Row {row_num}: Found prefetched temp for {db_timestamp_iso_str}: {temp_val:.2f}")
-
-
+                    
                     energy_val = float(energy_str)
-                    temp_val = float(temp_val)
-                    # print(type(temp_val), type(energy_val))
+                    final_temp_val = float(temp_val) if temp_val is not None else None
 
-                    if insert_reading(conn, db_timestamp_iso_str, energy_val, temp_val):
-                        added_count += 1; current_batch_count +=1
+                    if insert_reading(conn, db_timestamp_iso_str, energy_val, final_temp_val):
+                        added_count += 1; current_batch_count += 1
                     else:
                         skipped_count += 1
-                        # print(f"  Row {row_num}: Skipped duplicate or insert error (DateTime: {db_timestamp_iso_str}).")
                     
                     if current_batch_count >= batch_size:
                         conn.commit(); print(f"  Committed batch of {current_batch_count} records."); current_batch_count = 0
                 
-                except pd.errors.OutOfBoundsDatetime:
-                    print(f"  Row {row_num}: Error processing DateTime (OutOfBoundsDatetime). Data: {row}. Date string: '{dt_str_from_csv}'. Skipping.")
-                    skipped_count += 1
                 except Exception as e_row:
                     print(f"  Row {row_num}: Error processing. Data: {row}. Error: {e_row}")
                     skipped_count += 1
@@ -225,8 +221,8 @@ def inject_data_from_csv_with_temp_prefetch(csv_filepath):
         
         print(f"\n--- Injection Summary ---\nProcessed {processed_rows} rows.\nAdded {added_count} new records.\nSkipped {skipped_count} records.")
 
-    except FileNotFoundError: print(f"Error: CSV file not found: '{csv_filepath}'")
-    except Exception as e: print(f"Unexpected error: {e}"); import traceback; traceback.print_exc()
+    except Exception as e: 
+        print(f"Unexpected error: {e}"); import traceback; traceback.print_exc()
     finally:
         if conn: conn.close(); print("DB connection closed.")
 

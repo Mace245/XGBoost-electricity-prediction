@@ -27,7 +27,7 @@ def train_xgboost_model(X_train, y_train):
     y_train_fold, y_val_fold = y_train.iloc[:split_point], y_train.iloc[split_point:]
     
     model.fit(X_train_fold, y_train_fold, eval_set=[(X_val_fold, y_val_fold)], verbose=False)
-    print(f"Validation Score for the profile model: {model.best_score:.4f}")
+    # print(f"Validation Score for the profile model: {model.best_score:.4f}")
     return model
 
 def train_profile_model(
