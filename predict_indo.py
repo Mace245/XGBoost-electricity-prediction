@@ -10,12 +10,6 @@ import requests_cache
 from retry_requests import retry
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# --- 0. SETUP ---
-# Suppress warnings for cleaner output
-warnings.filterwarnings('ignore', category=FutureWarning)
-
-# --- 1. DATA FETCHING AND PREPARATION FUNCTIONS ---
-
 def prepare_data(electricity_data:pd.DataFrame, temperature_data:pd.DataFrame):
     merged_data = electricity_data.merge(temperature_data, how='left', left_index=True, right_index=True)
     print(merged_data)
@@ -83,17 +77,16 @@ def fetch_elec_temp(filepath):
     
     return electricity_data, temperature_data
 
-electricity_raw, temperature_raw = fetch_elec_temp('test.csv')
-merged_data_complete = prepare_data(electricity_raw, temperature_raw)
-test_df = merged_data_complete.tz_convert('Asia/Jakarta')
+# electricity_raw, temperature_raw = fetch_elec_temp('test.csv')
+# merged_data_complete = prepare_data(electricity_raw, temperature_raw)
+# test_df = merged_data_complete.tz_convert('Asia/Jakarta')
 
-electricity_raw, temperature_raw = fetch_elec_temp('test2.csv')
-merged_data_complete = prepare_data(electricity_raw, temperature_raw)
-test2_df = merged_data_complete.tz_convert('Asia/Jakarta')
+# electricity_raw, temperature_raw = fetch_elec_temp('test2.csv')
+# merged_data_complete = prepare_data(electricity_raw, temperature_raw)
+# test2_df = merged_data_complete.tz_convert('Asia/Jakarta')
 
 # --- 2. FEATURE ENGINEERING FUNCTION ---
 def create_features(df, label=None):
-    """Creates time series features from a datetime index."""
     df['hour'] = df.index.hour
     df['dayofweek'] = df.index.dayofweek
     df['quarter'] = df.index.quarter
@@ -113,23 +106,20 @@ def create_features(df, label=None):
 
 # --- 3. LOAD DATA AND CREATE FEATURES ---
 print("Loading and preparing data...")
-# Load initial training data for Building A
 from lib import data
 
 electricity_raw, temperature_raw = data.fetch_elec_temp()
 building_a_df = data.prepare_data(electricity_raw, temperature_raw)
-# Load and prepare the data for Building B
+
 print("\nLoading and splitting data for Building B from 'test.csv'...")
 electricity_raw_b, temperature_raw_b = fetch_elec_temp('test.csv')
 full_building_b_df = prepare_data(electricity_raw_b, temperature_raw_b)
 full_building_b_df = full_building_b_df.tz_convert('Asia/Jakarta')
 
-# Get the unique dates and split them
 unique_dates = full_building_b_df.index.normalize().unique()
 train_dates = unique_dates[:4]
 eval_date = unique_dates[4]
 
-# Create the training and evaluation sets for Building B
 building_b_df = full_building_b_df[full_building_b_df.index.normalize().isin(train_dates)]
 building_b_eval_df = full_building_b_df[full_building_b_df.index.normalize() == eval_date]
 
@@ -142,12 +132,10 @@ X_train_b, y_train_b = create_features(building_b_df, label='Wh')
 X_eval_b, y_eval_b = create_features(building_b_eval_df, label='Wh')
 
 # --- 4. SCALE DATA ---
-# Initialize and fit the scaler ONLY on the data from Building A
 scaler = MinMaxScaler()
 print("\nFitting scaler on Building A's data...")
 scaler.fit(X_train_a)
 
-# Transform both datasets using the SAME scaler learned from Building A
 print("Transforming data for both buildings...")
 X_train_a_scaled = scaler.transform(X_train_a)
 X_train_b_scaled = scaler.transform(X_train_b)
@@ -170,18 +158,14 @@ base_model.save_model(base_model_path)
 
 # --- 6. STAGE 2: FINE-TUNE A NEW MODEL FOR BUILDING B ---
 print("\n--- Stage 2: Fine-tuning a new, specialized model for Building B ---")
-# Create a new model instance for Building B
 building_b_model = xgb.XGBRegressor()
-# Load the state of the base model as a starting point
 building_b_model.load_model(base_model_path) 
 
-# Continue training (fine-tuning) on Building B's data
 building_b_model.fit(
     X_train_b_scaled, y_train_b,
     verbose=100
 )
 
-# Save the final, specialized model for Building B
 final_model_path = 'building_b_specialized_model.ubj'
 print(f"\nSaving the specialized Building B model to {final_model_path}...")
 building_b_model.save_model(final_model_path)

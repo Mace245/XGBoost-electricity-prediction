@@ -200,7 +200,7 @@
         loadingIndicator.style.display = 'inline-block';
         forecastErrorMessageDiv.style.display = 'none';
 
-        fetch("{{ url_for('run_forecast_dms_api') }}", {
+        fetch("{{ url_for('run_forecast_api') }}", {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ timeframe: selectedTimeframeValue }),

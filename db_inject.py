@@ -146,10 +146,10 @@ def inject_data_from_csv_with_temp_prefetch(csv_filepath):
         last_csv_time_utc = max(all_csv_datetimes_utc)
         
         # 1. Define the target end time in Asia/Jakarta timezone
-        target_end_time_jakarta = pd.Timestamp("2025-07-23 23:00:00", tz='Asia/Jakarta')
+        target_end_time_jakarta = pd.Timestamp("2025-07-27 23:00:00", tz='Asia/Jakarta')
         
         # 2. Convert target to UTC to correctly calculate the difference with our UTC data
-        target_end_time_utc = target_end_time_jakarta.tz_convert('UTC')
+        target_end_time_utc = target_end_time_jakarta
 
         time_offset = target_end_time_utc - last_csv_time_utc
         print(f"\nTime Adjustment Calculated:")
@@ -227,7 +227,8 @@ def inject_data_from_csv_with_temp_prefetch(csv_filepath):
         if conn: conn.close(); print("DB connection closed.")
 
 
-csv_file_to_inject = 'Data/processed_hourly_Wh_data.csv'
+# csv_file_to_inject = 'Data/processed_hourly_Wh_data.csv'
+csv_file_to_inject = 'test_sidang.csv'
 if not csv_file_to_inject: print("No CSV specified. Exiting.")
 elif not os.path.exists(csv_file_to_inject): print(f"Error: File '{csv_file_to_inject}' does not exist.")
 else:

@@ -67,10 +67,7 @@ data_to_send = {
   "disp_status_l2": 1
 }
 
-# 2. Send Data to Antares
 print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Sending data: {data_to_send}")
 response = antares.send(data_to_send, 'TADKT-1', 'PMM')
 
-# 3. Print Response (optional)
-# Antares library might print internally or return status/response content
-print(f"Antares response: {response}") # Check library's return value
+print(f"Antares response: {response}")

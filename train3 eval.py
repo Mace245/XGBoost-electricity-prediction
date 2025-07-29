@@ -56,11 +56,11 @@ model = xgb.XGBRegressor(
     objective='reg:squarederror',
     n_estimators=1000,      # 3000/28.96    2000/28.644     1000/28.121
     learning_rate=0.01,     # 0.01/28.121   0.05/32.21      0.1/30.949
-    max_depth=7,            # 7/28.121      5/27.139        3/25.906      
+    max_depth=3,            # 7/28.121      5/27.139        3/25.906      
     colsample_bytree=1.0,   # 1.0/25.906    0.5/27.134      0.1/31.779
     subsample=0.1,          # 0.1/28.121    0.3/26.511      0.5/27.004      1.0/28.165
-    reg_alpha=5.0,          # 0.0/26.529    0.1/26.529      0.5/26.574      1.0/26.568      5.0/26.511     10.0/28.054
-    reg_lambda=10.0,        # 0.0/26.689    0.1/26.591      0.5/26.531      1.0/26.727      5.0/26.639     10.0/26.511
+    reg_alpha=1.0,          # 0.0/26.529    0.1/26.529      0.5/26.574      1.0/26.568      5.0/26.511     10.0/28.054
+    reg_lambda=0.0,        # 0.0/26.689    0.1/26.591      0.5/26.531      1.0/26.727      5.0/26.639     10.0/26.511
     n_jobs=-1 
 )
 
@@ -92,13 +92,15 @@ plt.grid(False)
 plt.savefig('importance w temp',bbox_inches='tight')
 plt.show()
 
+# Plot 2: Actual vs. Predicted Values (Updated to match your example)
 test_data['Wh_pred'] = predictions
 plt.figure(figsize=(15, 6))
-test_data['Wh'].plot(label='Actual Values', style='-')
-test_data['Wh_pred'].plot(label='Predictions', style='--')
-plt.title('Actual vs. Predicted Values')
-plt.xlabel('Date')
-plt.ylabel('Wh')
+test_data['Wh'].plot(label='Nilai Aktual', style='-')
+test_data['Wh_pred'].plot(label='Nilai Prediksi', style='--')
+plt.title('Hasil Prediksi Model')
+plt.xlabel('')
+plt.ylabel('kWh')
 plt.legend()
 plt.grid(True)
+plt.savefig('actual_vs_predicted_id.png', bbox_inches='tight')
 plt.show()
