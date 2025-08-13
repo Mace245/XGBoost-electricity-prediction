@@ -1,0 +1,17 @@
+{
+  "Voltage": 223.1000061,
+  "Current": 0.029999999,
+  "Power": 1.200000048,
+  "Energy": 54.17599869,
+  "TotalEnergy": 22.95300865,
+  "DailyEnergy": 1.646011353,
+  "HourlyEnergy": 0.01599884,
+  "energyLimit2": 10,
+  "limit90": 9,
+  "limit80": 8,
+  "TotalCO2": 17.90334702,
+  "TotalCost": 32478.50781,
+  "statusLimit80": 0,
+  "statusLimit90": 0,
+  "powerFactor": 0.180000007
+}
